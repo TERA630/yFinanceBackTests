@@ -110,6 +110,56 @@ yFinance API呼び出し回数の現状:
 - `yf.Ticker(symbol)` の生成自体は、通常はこのコード上ではデータ取得プロパティ参照の準備であり、主な取得は上記プロパティ参照時に発生する。
 - yfinance内部のHTTPリクエスト数は、yfinance側の実装・キャッシュ・失敗時挙動に依存するため、コード上の呼び出し数と完全には一致しない可能性がある。
 
+### Commit 5: エントリールール実装の抽出
+
+状態: 完了
+
+実施内容:
+
+- `app/domain/entry_rules/` パッケージを追加した。
+- `app/domain/entry_rules/base.py` に `EntryRule` protocol を追加した。
+- `app/domain/entry_rules/a7r2.py` を追加した。
+- `add_reason`, `summarize_reasons`, `is_recoverable_soft_reason`, `can_promote_soft_fails`, `estimate_entry_limits`, `score_result_a7r2`, `evaluate_row_a7r2` を `a7r2.py` へ移動した。
+- `A7R2EntryRule` クラスを追加し、将来のエントリー条件差し替え口を用意した。
+- `backtest_A_a7r2.py` は、既存関数名を `app.domain.entry_rules.a7r2` から import する形に変更した。
+
+動作影響:
+
+- 仕様上の動作変更なし。
+- A7R2の判定条件、理由文、カテゴリ、スコア計算、pass / near pass 判定は維持している。
+- `evaluate_row_a7r2` は従来名で参照できるため、既存の呼び出し側互換性を保っている。
+
+検証:
+
+- `backtest_A_a7r2.py`, `app/domain/entry_rules/base.py`, `app/domain/entry_rules/a7r2.py`, `app/domain/indicators.py`, `app/domain/config.py`, `app/domain/models.py` の構文チェックを実施。
+- `backtest_A_a7r2.py` から移動後の `evaluate_row_a7r2` を従来名で参照できることを確認。
+- 固定のインメモリOHLCVとファンダメンタル値で `A7R2EntryRule.evaluate()` が `ScreenResult` を返すことを確認。
+
+### Commit 6: エントリー後評価とサマリーの抽出
+
+状態: 完了
+
+実施内容:
+
+- `app/domain/post_entry_metrics.py` を追加した。
+- `business_days`, `build_trade_date_index`, `build_forward_metrics_map`, `build_prev3_cache` を `post_entry_metrics.py` へ移動した。
+- `app/domain/summary.py` を追加した。
+- `summarize_signals` を `summary.py` へ移動した。
+- `backtest_A_a7r2.py` は、移動後の関数を domain モジュールから import する形に変更した。
+
+動作影響:
+
+- 仕様上の動作変更なし。
+- 取引日対応、将来リターン、最大上昇率、最大下落率、サマリー集計の計算式は維持している。
+- `business_days`, `build_forward_metrics_map`, `summarize_signals` などは従来名で参照できるため、既存呼び出し側互換性を保っている。
+
+検証:
+
+- `backtest_A_a7r2.py`, `app/domain/post_entry_metrics.py`, `app/domain/summary.py`, `app/domain/entry_rules/a7r2.py`, `app/domain/indicators.py` の構文チェックを実施。
+- `backtest_A_a7r2.py` から移動後の `build_forward_metrics_map` と `summarize_signals` を従来名で参照できることを確認。
+- 固定のインメモリOHLCVで営業日生成、取引日対応、将来リターン、直近3日キャッシュが動くことを確認。
+- 固定のインメモリシグナルDataFrameでサマリー集計が動くことを確認。
+
 ## 現行仕様
 
 ### 入力
