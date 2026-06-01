@@ -88,6 +88,8 @@ from app.domain.post_entry_metrics import (
     business_days,
 )
 from app.domain.summary import summarize_signals
+from app.output.csv_writer import save_outputs
+from app.output.signal_record import make_signal_record, normalize_category
 
 try:
     import tkinter as tk
@@ -130,65 +132,6 @@ def load_watchlist(stock_md_path: Path) -> List[Tuple[str, str]]:
 def bulk_download_prices(watchlist: List[Tuple[str, str]], start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
     raw_price_map = fetch_raw_price_map(watchlist, start_date, end_date)
     return {code: compute_indicators(df) for code, df in raw_price_map.items()}
-
-
-# =========================
-# output helpers
-# =========================
-def normalize_category(result: ScreenResult) -> str:
-    if result.passed:
-        return "本命候補"
-    if result.near_pass:
-        return "監視候補"
-    return result.watch_status or "判定保留"
-
-
-def make_signal_record(result: ScreenResult, signal_date: pd.Timestamp, future_metrics: dict) -> dict:
-    row = {
-        "signal_date": signal_date.strftime("%Y-%m-%d"),
-        "trade_date_used": result.trade_date,
-        "name": result.name,
-        "code": result.code,
-        "category": normalize_category(result),
-        "watch_status": result.watch_status,
-        "score": result.score,
-        "close": result.day_close,
-        "ma5": result.ma5,
-        "ma25": result.ma25,
-        "ma75": result.ma75,
-        "dev5_pct": result.dev5,
-        "dev25_pct": result.dev25,
-        "rsi": result.rsi,
-        "two_day_gain_pct": result.two_day_gain_pct,
-        "roa_pct": result.roa_pct,
-        "per": result.per,
-        "pbr": result.pbr,
-        "sales_growth_pct": result.sales_growth_pct,
-        "day_change_pct": result.day_change_pct,
-        "volume_ratio_20d": result.volume_ratio_20d,
-        "near_high_ratio": result.near_high_ratio,
-        "ma25_slope_pct": result.ma25_slope_pct,
-        "ma75_slope_pct": result.ma75_slope_pct,
-        "bb_upper": result.bb_upper,
-        "bb_lower": result.bb_lower,
-        "bb_percent_b": result.bb_percent_b,
-        "primary_category": result.primary_category,
-        "primary_reason": result.primary_reason,
-        "secondary_reasons": " / ".join(result.secondary_reasons) if result.secondary_reasons else "",
-        "entry_limit_low": result.entry_limit_low,
-        "entry_limit_high": result.entry_limit_high,
-    }
-    row.update(future_metrics)
-    return row
-
-
-def save_outputs(out_dir: Path, start_date: str, end_date: str, signals_df: pd.DataFrame, summary_df: pd.DataFrame):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    signals_path = out_dir / f"backtest_A_signals_a7r2_{start_date}_to_{end_date}.csv"
-    summary_path = out_dir / f"backtest_A_summary_a7r2_{start_date}_to_{end_date}.csv"
-    signals_df.to_csv(signals_path, index=False, encoding="utf-8-sig")
-    summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
-    return signals_path, summary_path
 
 
 # =========================

@@ -160,6 +160,32 @@ yFinance API呼び出し回数の現状:
 - 固定のインメモリOHLCVで営業日生成、取引日対応、将来リターン、直近3日キャッシュが動くことを確認。
 - 固定のインメモリシグナルDataFrameでサマリー集計が動くことを確認。
 
+### Commit 7: 出力層の抽出
+
+状態: 完了
+
+実施内容:
+
+- `app/output/` パッケージを追加した。
+- `app/output/signal_record.py` を追加した。
+- `normalize_category`, `make_signal_record` を `signal_record.py` へ移動した。
+- `app/output/csv_writer.py` を追加した。
+- `save_outputs` を `csv_writer.py` へ移動した。
+- `backtest_A_a7r2.py` は、移動後の出力関数を output モジュールから import する形に変更した。
+
+動作影響:
+
+- 仕様上の動作変更なし。
+- シグナルCSVの行生成、カテゴリ正規化、CSVファイル名、`utf-8-sig` エンコーディングは維持している。
+- `make_signal_record`, `normalize_category`, `save_outputs` は従来名で参照できるため、既存呼び出し側互換性を保っている。
+
+検証:
+
+- `backtest_A_a7r2.py`, `app/output/signal_record.py`, `app/output/csv_writer.py`, `app/domain/models.py` の構文チェックを実施。
+- `backtest_A_a7r2.py` から移動後の `make_signal_record` と `save_outputs` を従来名で参照できることを確認。
+- 固定の `ScreenResult` からシグナル行を生成し、カテゴリと将来指標が出力行に入ることを確認。
+- 一時ディレクトリにCSVを保存し、既存仕様通りのファイル名で2ファイルが作成されることを確認。
+
 ## 現行仕様
 
 ### 入力
