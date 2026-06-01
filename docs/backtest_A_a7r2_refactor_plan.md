@@ -186,6 +186,150 @@ yFinance API呼び出し回数の現状:
 - 固定の `ScreenResult` からシグナル行を生成し、カテゴリと将来指標が出力行に入ることを確認。
 - 一時ディレクトリにCSVを保存し、既存仕様通りのファイル名で2ファイルが作成されることを確認。
 
+### Commit 8: ユースケース層の抽出
+
+状態: 完了
+
+実施内容:
+
+- `app/usecases/` パッケージを追加した。
+- `app/usecases/watchlist.py` を追加した。
+- `parse_stock_md`, `load_watchlist` を `watchlist.py` へ移動した。
+- `app/usecases/run_backtest.py` を追加した。
+- `bulk_download_prices`, `run_backtest_A7R2` を `run_backtest.py` へ移動した。
+- `backtest_A_a7r2.py` は、移動後のユースケース関数を import する互換エントリーポイント寄りの構成に変更した。
+
+動作影響:
+
+- 仕様上の動作変更なし。
+- watchlist のパース、価格取得、指標計算、ファンダ取得、日次判定、将来評価、サマリー作成の流れは維持している。
+- `parse_stock_md`, `load_watchlist`, `bulk_download_prices`, `run_backtest_A7R2` は従来名で参照できるため、既存呼び出し側互換性を保っている。
+
+検証:
+
+- `backtest_A_a7r2.py`, `app/usecases/watchlist.py`, `app/usecases/run_backtest.py` の構文チェックを実施。
+- `backtest_A_a7r2.py` から移動後の `run_backtest_A7R2` と `parse_stock_md` を従来名で参照できることを確認。
+- インメモリOHLCVとfakeファンダメンタル取得関数で `run_backtest_A7R2` がシグナルDataFrameとサマリーDataFrameを返すことを確認。
+
+### Commit 9: プレゼンテーション層と互換エントリーポイントの抽出
+
+状態: 完了
+
+実施内容:
+
+- `app/presentation/` パッケージを追加した。
+- `app/presentation/gui.py` を追加した。
+- `select_stock_file`, `select_output_dir`, `select_date_range` を `gui.py` へ移動した。
+- GUI完了通知を `show_completion_message` として `gui.py` に分離した。
+- `app/presentation/cli.py` を追加した。
+- `build_parser`, `resolve_inputs` を `cli.py` へ移動した。
+- `app/main.py` を追加し、CLI入力解決、バックテスト実行、CSV保存、完了表示をまとめた。
+- `backtest_A_a7r2.py` は `app.main.main` を呼ぶ薄い互換エントリーポイントに変更した。
+
+動作影響:
+
+- CLI/GUIの入力仕様、出力保存、完了表示の仕様は維持している。
+- `python backtest_A_a7r2.py ...` で起動する入口は維持している。
+- ただし `backtest_A_a7r2.py` は薄い起動ファイルになったため、個別関数を直接importする場合は移動先モジュールから参照する。
+
+検証:
+
+- `backtest_A_a7r2.py`, `app/main.py`, `app/presentation/cli.py`, `app/presentation/gui.py`, `app/usecases/run_backtest.py` の構文チェックを実施。
+- `backtest_A_a7r2.py` の `main` が `app.main.main` を参照していることを確認。
+- CLI parser のhelpに `--stock-md` と `--gui` が含まれることを確認。
+- `python backtest_A_a7r2.py --help` は環境側の起動エラーで直接確認できなかったため、parser の `format_help()` で代替確認した。
+
+## GUIで設定しやすいエントリー条件候補
+
+将来GUIでエントリー条件を変更できるようにする場合、まずは数値入力・スライダー・チェックボックス・セレクトボックスで扱いやすい条件から外部設定化する。
+
+### 優先度高: 現行A7R2にすでに存在する条件
+
+- 25日線と75日線の関係
+  - 現行条件: 25日線が75日線より上。
+  - GUI案: チェックボックス「25日線 > 75日線を必須にする」。
+- 終値と25日線の関係
+  - 現行条件: 終値が25日線より上。
+  - GUI案: チェックボックス「終値 > 25日線を必須にする」。
+- 25日線からの乖離率
+  - 現行条件: 下限、soft過熱、hard過熱を複数閾値で判定。
+  - GUI案: 数値入力「許容下限」「やや過熱」「強い過熱」「除外上限」。
+- 5日線からの乖離率
+  - 現行条件: 5日線割れ、5日線からの過熱を判定。
+  - GUI案: 数値入力「5日線下限」「5日線上限」。
+- 25日線の傾き
+  - 現行条件: `MA25_SlopePct > 0.15`。
+  - GUI案: 数値入力「25日線の最低傾き」。
+- 75日線の傾き
+  - 現行条件: `MA75_SlopePct >= -0.10`。
+  - GUI案: 数値入力「75日線の最低傾き」。
+- RSI
+  - 現行条件: `44 <= RSI <= 65`。
+  - GUI案: 数値入力「RSI下限」「RSI上限」。
+- 当日上昇率
+  - 現行条件: `MAX_DAY_GAIN = 5.5` を超えると過熱。
+  - GUI案: 数値入力「当日上昇率の上限」。
+- 直近2日上昇率
+  - 現行条件: `TWO_DAY_GAIN_HARD_MAX = 7.0` を超えると過熱。
+  - GUI案: 数値入力「2日上昇率の上限」。
+- 20日平均売買代金
+  - 現行条件: `15億円以上`。
+  - GUI案: 金額入力「最低20日平均売買代金」。
+- 出来高倍率
+  - 現行では出力項目にはあるが、主条件としては強く使っていない。
+  - GUI案: 任意条件「出来高倍率がN倍以上」を追加しやすい。
+- 60日高値圏
+  - 現行条件: `NearHighRatio >= 0.87`。
+  - GUI案: 数値入力「60日高値に対する最低比率」。
+- ボリンジャーバンド%B
+  - 現行条件: soft/hard過熱の上限あり。
+  - GUI案: 数値入力「%B注意ライン」「%B除外ライン」。
+- PER過熱除外
+  - 現行条件: 高PER、25日乖離、RSIの組み合わせで除外。
+  - GUI案: チェックボックス「高PER過熱除外を有効にする」+ PER/乖離/RSI閾値。
+- ROA
+  - 現行条件: 3%、5%、7%で段階評価。
+  - GUI案: 数値入力「ROA除外ライン」「ROA合格ライン」「ROA強評価ライン」。
+- 売上成長率
+  - 現行条件: 一般銘柄とリーダー銘柄で下限が異なる。
+  - GUI案: 数値入力「一般銘柄の売上成長下限」「リーダー銘柄の売上成長下限」。
+
+### 優先度中: GUI化しやすいが条件設計が必要なもの
+
+- 終値位置
+  - 現行値: `ClosePositionPct` を計算済み。
+  - GUI案: 「ローソク足内の終値位置がN%以上」を条件化できる。
+- 出来高増の下落検出
+  - 現行条件: 出来高増で2日連続下落を hard fail。
+  - GUI案: チェックボックス「出来高増の連続下落を除外」。
+- 陰線連続数
+  - 現行条件: 直近3日で陰線3本は除外。
+  - GUI案: 数値入力「除外する陰線連続数」。
+- 安値切り下げ回数
+  - 現行条件: 直近3日で安値切り下げ2回はsoft、3回はhard。
+  - GUI案: 数値入力「soft回数」「hard回数」。
+- エントリー価格帯
+  - 現行条件: 25日線から+1.5%まで。
+  - GUI案: 数値入力「25日線からの許容上限%」。
+
+### 追加実装が必要: VWAP系
+
+現行A7R2にはVWAP指標はまだ存在しない。GUI条件に入れるなら、先に `domain.indicators` にVWAP列を追加する必要がある。
+
+候補:
+
+- 日足ベースのローリングVWAP
+  - 例: `RollingVWAP20 = sum(TypicalPrice * Volume, 20) / sum(Volume, 20)`。
+  - GUI案: 「終値 > 20日VWAP」「終値がVWAPからN%以内」。
+- セッションVWAP
+  - 日中足が必要。現在の取得は日足なので、別データ取得設計が必要。
+  - GUI案としては強力だが、yfinance取得回数やデータ量が増える。
+- アンカーVWAP
+  - 決算日、高値日、安値日などの起点定義が必要。
+  - GUI案: 「直近N日の安値日からのVWAPを上回る」など。
+
+最初にGUI化するなら、現行データだけで完結する「25日線乖離」「RSI」「売買代金」「出来高倍率」「60日高値圏」「当日/2日上昇率」「エントリー許容上限」から始めるのが安全。
+
 ## 現行仕様
 
 ### 入力
