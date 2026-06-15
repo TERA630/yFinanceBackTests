@@ -13,16 +13,17 @@ ENTRY_1100 = "11:00"
 ENTRY_1400 = "14:00"
 ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_1100, ENTRY_1400)
 HORIZONS = (1, 5, 20)
-DRAWDOWN_WINDOWS = (5, 20)
+EXCURSION_WINDOWS = (5, 10, 20)
 
 
 @dataclass(frozen=True)
-class VwapBacktestConfig:
+class A8BacktestConfig:
     start_date: str
     end_date: str
     dev25_min: float
     dev25_max: float
     entry_time: str
+    lower_low_exclude_count: int = 0
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -33,6 +34,12 @@ class VwapBacktestConfig:
             raise ValueError("25日乖離率の最低値は最高値より小さくしてください。")
         if self.entry_time not in ENTRY_TIMES:
             raise ValueError(f"未対応のVWAP判定時刻です: {self.entry_time}")
+        if self.lower_low_exclude_count not in (0, 1, 2, 3):
+            raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
+
+
+# Compatibility alias for callers using the old name.
+VwapBacktestConfig = A8BacktestConfig
 
 
 @dataclass(frozen=True)
@@ -99,18 +106,27 @@ def build_trade_metrics(daily: pd.DataFrame, entry_date: pd.Timestamp, entry_pri
         metrics[f"profit_loss_{horizon}d"] = None if sell_price is None else sell_price - entry_price
         metrics[f"return_{horizon}d_pct"] = None if sell_price is None else (sell_price / entry_price - 1.0) * 100.0
 
-    for window in DRAWDOWN_WINDOWS:
+    for window in EXCURSION_WINDOWS:
         if pos + window >= len(daily):
             metrics[f"minimum_price_{window}d"] = None
+            metrics[f"maximum_price_{window}d"] = None
             metrics[f"max_drawdown_{window}d"] = None
             metrics[f"max_drawdown_{window}d_pct"] = None
+            metrics[f"max_favorable_excursion_{window}d_pct"] = None
             continue
         lows = pd.to_numeric(daily["Low"].iloc[pos + 1:pos + window + 1], errors="coerce").dropna()
+        high_source = daily["High"] if "High" in daily.columns else daily["Close"]
+        highs = pd.to_numeric(high_source.iloc[pos + 1:pos + window + 1], errors="coerce").dropna()
         minimum = None if lows.empty else float(lows.min())
+        maximum = None if highs.empty else float(highs.max())
         metrics[f"minimum_price_{window}d"] = minimum
+        metrics[f"maximum_price_{window}d"] = maximum
         metrics[f"max_drawdown_{window}d"] = None if minimum is None else min(0.0, minimum - entry_price)
         metrics[f"max_drawdown_{window}d_pct"] = (
             None if minimum is None else min(0.0, (minimum / entry_price - 1.0) * 100.0)
+        )
+        metrics[f"max_favorable_excursion_{window}d_pct"] = (
+            None if maximum is None else max(0.0, (maximum / entry_price - 1.0) * 100.0)
         )
     return metrics
 
@@ -121,10 +137,12 @@ def empty_trade_metrics() -> dict:
         metrics[f"sell_price_{horizon}d"] = None
         metrics[f"profit_loss_{horizon}d"] = None
         metrics[f"return_{horizon}d_pct"] = None
-    for window in DRAWDOWN_WINDOWS:
+    for window in EXCURSION_WINDOWS:
         metrics[f"minimum_price_{window}d"] = None
+        metrics[f"maximum_price_{window}d"] = None
         metrics[f"max_drawdown_{window}d"] = None
         metrics[f"max_drawdown_{window}d_pct"] = None
+        metrics[f"max_favorable_excursion_{window}d_pct"] = None
     return metrics
 
 

@@ -9,7 +9,7 @@ import pandas as pd
 
 from app.domain.vwap_backtest import build_trade_metrics, calculate_vwap, intraday_entry
 from app.output.markdown_writer import _summary_markdown
-from app.usecases.run_vwap_backtest import build_summary, run_vwap_backtest
+from app.usecases.run_vwap_backtest import _lower_low_count, build_summary, run_vwap_backtest
 from app.domain.vwap_backtest import VwapBacktestConfig
 
 
@@ -47,6 +47,7 @@ class TradeMetricsTest(unittest.TestCase):
         daily = pd.DataFrame(
             {
                 "Close": [100.0] + [101.0, 102.0, 103.0, 104.0, 105.0] + [110.0] * 14 + [120.0, 121.0],
+                "High": [101.0] + [102.0, 103.0, 104.0, 105.0, 106.0] + [111.0] * 14 + [121.0, 122.0],
                 "Low": [99.0] + [98.0, 97.0, 96.0, 95.0, 94.0] + [93.0] * 16,
             },
             index=index,
@@ -59,6 +60,8 @@ class TradeMetricsTest(unittest.TestCase):
         self.assertEqual(metrics["max_drawdown_5d"], -6.0)
         self.assertEqual(metrics["minimum_price_20d"], 93.0)
         self.assertEqual(metrics["max_drawdown_20d"], -7.0)
+        self.assertAlmostEqual(metrics["max_favorable_excursion_5d_pct"], 6.0)
+        self.assertAlmostEqual(metrics["max_favorable_excursion_20d_pct"], 21.0)
 
     def test_drawdown_is_zero_when_all_future_lows_are_above_entry(self):
         index = pd.bdate_range("2026-05-01", periods=6)
@@ -100,6 +103,7 @@ class SummaryTest(unittest.TestCase):
                 "return_5d_pct": [4.5],
                 "profit_loss_5d": [4.5],
                 "max_drawdown_5d_pct": [-3.5],
+                "max_favorable_excursion_5d_pct": [6.0],
                 "return_20d_pct": [5.0],
                 "profit_loss_20d": [5.0],
             }
@@ -111,6 +115,14 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("最大含み損 平均: -3.50%", markdown)
         self.assertIn("最大含み損 中央値: -3.50%", markdown)
         self.assertIn("-3%逆行率: 100.00%", markdown)
+        self.assertIn("最大順行(MFE)中央値: 6.00%", markdown)
+        self.assertIn("+5%到達率: 100.00%", markdown)
+
+
+class LowerLowTest(unittest.TestCase):
+    def test_counts_lower_lows_over_the_latest_three_comparisons(self):
+        daily = pd.DataFrame({"Low": [100.0, 99.0, 101.0, 98.0]})
+        self.assertEqual(_lower_low_count(daily, 3), 2)
 
 
 class BacktestUsecaseTest(unittest.TestCase):
@@ -245,6 +257,40 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["VWAP未維持"], 1)
+
+    def test_rejects_entry_at_selected_lower_low_threshold(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        lows = [99.0] * len(dates)
+        lows[25:29] = [102.0, 101.0, 100.0, 99.0]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 102.0, "Low": lows, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            lower_low_exclude_count=3,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["安値切り下げ回数が除外基準以上"], 1)
 
 
 if __name__ == "__main__":

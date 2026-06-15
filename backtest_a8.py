@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Compatibility entry point. Use backtest_a8.py for new runs."""
-
-from __future__ import annotations
+"""Official entry point for the integrated A8 backtest."""
 
 from app.a8_main import main
 

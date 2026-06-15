@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""GUI entry point for the VWAP-maintenance backtest."""
+"""Compatibility entry point. Use backtest_a8.py for new runs."""
 
-from app.vwap_main import main
+from app.a8_main import main
 
 
 if __name__ == "__main__":

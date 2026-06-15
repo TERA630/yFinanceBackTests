@@ -10,16 +10,17 @@ import pandas as pd
 
 from app.data.vwap_price_repository import fetch_daily_prices, fetch_intraday_prices
 from app.domain.vwap_backtest import (
+    EXCURSION_WINDOWS,
     ENTRY_PREV_CLOSE,
     HORIZONS,
-    VwapBacktestConfig,
+    A8BacktestConfig,
     build_trade_metrics,
     intraday_entry,
 )
 from app.usecases.watchlist import load_watchlist
 
 
-def run_vwap_backtest(stock_md_path: Path, config: VwapBacktestConfig) -> tuple[pd.DataFrame, dict]:
+def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.DataFrame, dict]:
     config.validate()
     _validate_intraday_range(config)
     watchlist = load_watchlist(stock_md_path)
@@ -55,6 +56,11 @@ def run_vwap_backtest(stock_md_path: Path, config: VwapBacktestConfig) -> tuple[
             dev25_pct = (previous_close / ma25 - 1.0) * 100.0
             if not (config.dev25_min < dev25_pct <= config.dev25_max):
                 skipped["25日乖離率が範囲外"] += 1
+                continue
+
+            lower_low_count = _lower_low_count(daily, daily_position)
+            if config.lower_low_exclude_count > 0 and lower_low_count >= config.lower_low_exclude_count:
+                skipped["安値切り下げ回数が除外基準以上"] += 1
                 continue
 
             if config.entry_time == ENTRY_PREV_CLOSE:
@@ -111,6 +117,7 @@ def run_vwap_backtest(stock_md_path: Path, config: VwapBacktestConfig) -> tuple[
                 "previous_close": previous_close,
                 "previous_ma25": ma25,
                 "previous_dev25_pct": dev25_pct,
+                "lower_low_count_3d": lower_low_count,
                 "entry_price": entry_price,
                 "entry_ma25": entry_ma25,
                 "entry_dev25_pct": entry_dev25_pct,
@@ -128,7 +135,7 @@ def run_vwap_backtest(stock_md_path: Path, config: VwapBacktestConfig) -> tuple[
 
 def build_summary(
     trades: pd.DataFrame,
-    config: VwapBacktestConfig,
+    config: A8BacktestConfig,
     stock_count: int,
     evaluated: int,
     skipped: Counter,
@@ -139,6 +146,7 @@ def build_summary(
         "dev25_min": config.dev25_min,
         "dev25_max": config.dev25_max,
         "entry_time": config.entry_time,
+        "lower_low_exclude_count": config.lower_low_exclude_count,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -154,20 +162,34 @@ def build_summary(
         summary[f"average_return_{horizon}d_pct"] = None if values.empty else float(values.mean())
         summary[f"total_profit_loss_{horizon}d"] = None if profits.empty else float(profits.sum())
 
-    drawdowns_5d = pd.to_numeric(
-        trades.get("max_drawdown_5d_pct", pd.Series(dtype=float)), errors="coerce"
-    ).dropna()
-    summary["completed_drawdown_5d"] = int(len(drawdowns_5d))
-    summary["average_max_drawdown_5d_pct"] = (
-        None if drawdowns_5d.empty else float(drawdowns_5d.mean())
-    )
-    summary["median_max_drawdown_5d_pct"] = (
-        None if drawdowns_5d.empty else float(drawdowns_5d.median())
-    )
-    summary["adverse_3pct_rate_5d_pct"] = (
-        None if drawdowns_5d.empty else float((drawdowns_5d <= -3.0).mean() * 100.0)
-    )
+    for window in EXCURSION_WINDOWS:
+        maes = pd.to_numeric(
+            trades.get(f"max_drawdown_{window}d_pct", pd.Series(dtype=float)), errors="coerce"
+        ).dropna()
+        mfes = pd.to_numeric(
+            trades.get(f"max_favorable_excursion_{window}d_pct", pd.Series(dtype=float)), errors="coerce"
+        ).dropna()
+        summary[f"completed_excursion_{window}d"] = int(min(len(maes), len(mfes)))
+        summary[f"average_mae_{window}d_pct"] = None if maes.empty else float(maes.mean())
+        summary[f"median_mae_{window}d_pct"] = None if maes.empty else float(maes.median())
+        summary[f"median_mfe_{window}d_pct"] = None if mfes.empty else float(mfes.median())
+        summary[f"adverse_3pct_rate_{window}d_pct"] = (
+            None if maes.empty else float((maes <= -3.0).mean() * 100.0)
+        )
+        summary[f"reach_5pct_rate_{window}d_pct"] = (
+            None if mfes.empty else float((mfes >= 5.0).mean() * 100.0)
+        )
+
+    # Compatibility keys retained for existing report consumers.
+    summary["completed_drawdown_5d"] = summary["completed_excursion_5d"]
+    summary["average_max_drawdown_5d_pct"] = summary["average_mae_5d_pct"]
+    summary["median_max_drawdown_5d_pct"] = summary["median_mae_5d_pct"]
     return summary
+
+
+def run_vwap_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.DataFrame, dict]:
+    """Compatibility alias for the former VWAP-only entry point."""
+    return run_a8_backtest(stock_md_path, config)
 
 
 def _prepare_daily(df: pd.DataFrame) -> pd.DataFrame:
@@ -187,6 +209,12 @@ def _provisional_ma25(daily: pd.DataFrame, signal_position: int, entry_price: fl
     if len(closes) != 24:
         return None
     return float((closes.sum() + entry_price) / 25.0)
+
+
+def _lower_low_count(daily: pd.DataFrame, signal_position: int) -> int:
+    start = max(0, signal_position - 3)
+    lows = pd.to_numeric(daily["Low"].iloc[start:signal_position + 1], errors="coerce")
+    return int((lows.diff() < 0).iloc[-3:].fillna(False).sum())
 
 
 def _validate_intraday_range(config: VwapBacktestConfig) -> None:
