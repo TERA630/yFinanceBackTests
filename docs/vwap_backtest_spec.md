@@ -1,5 +1,7 @@
 # VWAP維持・25日線基準バックテスト仕様書
 
+> この文書は旧VWAP単独版の履歴資料です。現在の正式仕様と起動方法は `docs/a8_backtest_spec.md` を参照してください。
+
 ## 1. 目的
 
 yfinanceから取得した価格データを使い、監視銘柄について前日・当日の25日移動平均乖離率、25日線の傾き、VWAP維持を評価する。条件成立時の価格を買値とし、1、5、20営業日後の損益、および5、20営業日内の最大含み損を集計する。
@@ -9,7 +11,7 @@ yfinanceから取得した価格データを使い、監視銘柄について前
 ## 2. 起動方法
 
 ```powershell
-python backtest_vwap.py
+python backtest_a8.py
 ```
 
 起動すると専用GUIを表示する。
@@ -129,7 +131,7 @@ GUIの開始日・終了日は「25日乖離率を判定する日」の範囲で
 ## 11. モジュール構成
 
 ```text
-backtest_vwap.py
+backtest_a8.py
 app/
   vwap_main.py
   presentation/vwap_gui.py

@@ -24,6 +24,7 @@ class A8BacktestConfig:
     dev25_max: float
     entry_time: str
     lower_low_exclude_count: int = 0
+    require_vwap_confirmation: bool = True
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -33,7 +34,9 @@ class A8BacktestConfig:
         if self.dev25_min >= self.dev25_max:
             raise ValueError("25日乖離率の最低値は最高値より小さくしてください。")
         if self.entry_time not in ENTRY_TIMES:
-            raise ValueError(f"未対応のVWAP判定時刻です: {self.entry_time}")
+            raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
+        if not self.require_vwap_confirmation and self.entry_time == ENTRY_PREV_CLOSE:
+            raise ValueError("VWAP維持確認なしでは、エントリー時刻を11:00または14:00にしてください。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):
             raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
 
@@ -72,7 +75,11 @@ def calculate_vwap(rows: pd.DataFrame) -> Optional[float]:
     return None if pd.isna(value) else value
 
 
-def intraday_entry(intraday: pd.DataFrame, trade_date: pd.Timestamp, cutoff: str) -> Optional[tuple[float, float]]:
+def intraday_entry(
+    intraday: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    cutoff: str,
+) -> Optional[tuple[float, Optional[float]]]:
     if intraday is None or intraday.empty:
         return None
     day = intraday.loc[intraday.index.normalize() == pd.Timestamp(trade_date).normalize()]
@@ -86,7 +93,7 @@ def intraday_entry(intraday: pd.DataFrame, trade_date: pd.Timestamp, cutoff: str
         return None
     vwap = calculate_vwap(eligible)
     price = pd.to_numeric(eligible["Close"], errors="coerce").iloc[-1]
-    if vwap is None or pd.isna(price):
+    if pd.isna(price):
         return None
     return float(price), vwap
 

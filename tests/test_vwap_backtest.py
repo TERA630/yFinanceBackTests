@@ -40,6 +40,18 @@ class VwapCalculationTest(unittest.TestCase):
         self.assertEqual(price, 99.0)
         self.assertAlmostEqual(vwap, 99.0)
 
+    def test_config_rejects_previous_close_without_vwap_confirmation(self):
+        config = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "prev_close",
+            require_vwap_confirmation=False,
+        )
+        with self.assertRaises(ValueError):
+            config.validate()
+
 
 class TradeMetricsTest(unittest.TestCase):
     def test_future_closes_and_drawdown_are_based_on_entry_price(self):
@@ -257,6 +269,73 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["VWAP未維持"], 1)
+
+    def test_enters_at_selected_time_without_vwap_confirmation(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 102.0, "Low": 98.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [102.0], "Low": [100.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            require_vwap_confirmation=False,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["entry_price"], 100.0)
+        self.assertFalse(trades.iloc[0]["vwap_confirmation_required"])
+        self.assertEqual(summary["entry_count"], 1)
+        self.assertFalse(summary["require_vwap_confirmation"])
+
+    def test_enters_without_calculable_vwap_when_confirmation_is_off(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 102.0, "Low": 98.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [0.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            require_vwap_confirmation=False,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, _ = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertTrue(pd.isna(trades.iloc[0]["vwap"]))
 
     def test_rejects_entry_at_selected_lower_low_threshold(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)

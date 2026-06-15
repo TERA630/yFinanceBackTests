@@ -29,7 +29,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     print("[2/3] 5分足データ取得")
     intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
-    print("[3/3] VWAPバックテスト")
+    print("[3/3] A8バックテスト")
 
     records: List[dict] = []
     skipped = Counter()
@@ -67,7 +67,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 entry_date = signal_date
                 entry = intraday_entry(intraday, entry_date, "15:30")
                 entry_price = previous_close
-                if entry is None:
+                if entry is None or (config.require_vwap_confirmation and entry[1] is None):
                     skipped["前日分足データなし"] += 1
                     continue
                 _, vwap = entry
@@ -84,6 +84,9 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     skipped["指定時刻の分足データなし"] += 1
                     continue
                 entry_price, vwap = entry
+                if config.require_vwap_confirmation and vwap is None:
+                    skipped["VWAPを計算できない"] += 1
+                    continue
                 entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
                 previous_ma25 = ma25
 
@@ -104,7 +107,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["25日線が下向き"] += 1
                 continue
 
-            if entry_price < vwap:
+            if config.require_vwap_confirmation and entry_price < vwap:
                 skipped["VWAP未維持"] += 1
                 continue
 
@@ -114,6 +117,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "name": name,
                 "code": code,
                 "entry_time": config.entry_time,
+                "vwap_confirmation_required": config.require_vwap_confirmation,
                 "previous_close": previous_close,
                 "previous_ma25": ma25,
                 "previous_dev25_pct": dev25_pct,
@@ -123,7 +127,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "entry_dev25_pct": entry_dev25_pct,
                 "ma25_slope_pct": ma25_slope_pct,
                 "vwap": vwap,
-                "vwap_margin_pct": (entry_price / vwap - 1.0) * 100.0,
+                "vwap_margin_pct": None if vwap in (None, 0) else (entry_price / vwap - 1.0) * 100.0,
             }
             record.update(build_trade_metrics(daily, entry_date, entry_price))
             records.append(record)
@@ -146,6 +150,7 @@ def build_summary(
         "dev25_min": config.dev25_min,
         "dev25_max": config.dev25_max,
         "entry_time": config.entry_time,
+        "require_vwap_confirmation": config.require_vwap_confirmation,
         "lower_low_exclude_count": config.lower_low_exclude_count,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
