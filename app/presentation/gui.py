@@ -7,12 +7,13 @@ from typing import Optional, Tuple
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog, messagebox, ttk
     from tkcalendar import DateEntry
 except Exception:
     tk = None
     filedialog = None
     messagebox = None
+    ttk = None
     DateEntry = None
 
 
@@ -44,14 +45,14 @@ def select_output_dir(initial_dir: Optional[Path] = None) -> Optional[Path]:
     return Path(folder) if folder else None
 
 
-def select_date_range() -> Optional[Tuple[str, str]]:
-    if tk is None or DateEntry is None:
+def select_date_range() -> Optional[Tuple[str, str, int]]:
+    if tk is None or ttk is None or DateEntry is None:
         raise RuntimeError("tkcalendar が使えません。pip install tkcalendar を実行するか、CLI引数で実行してください。")
 
-    result = {"start": None, "end": None}
+    result = {"start": None, "end": None, "lower_low_exclude_count": None}
     win = tk.Tk()
     win.title("A7R バックテスト期間を選択")
-    win.geometry("360x200")
+    win.geometry("420x270")
     win.resizable(False, False)
 
     tk.Label(win, text="開始日").pack(pady=(15, 5))
@@ -62,6 +63,11 @@ def select_date_range() -> Optional[Tuple[str, str]]:
     end_entry = DateEntry(win, width=14, background="darkblue", foreground="white", borderwidth=2, date_pattern="yyyy-mm-dd", locale="ja_JP")
     end_entry.pack()
 
+    tk.Label(win, text="直近3日間の安値切り下げ銘柄を除外").pack(pady=(15, 5))
+    lower_low_box = ttk.Combobox(win, width=12, state="readonly", values=("0回", "1回", "2回", "3回"))
+    lower_low_box.current(0)
+    lower_low_box.pack()
+
     def on_ok():
         start = start_entry.get_date().strftime("%Y-%m-%d")
         end = end_entry.get_date().strftime("%Y-%m-%d")
@@ -71,6 +77,7 @@ def select_date_range() -> Optional[Tuple[str, str]]:
             return
         result["start"] = start
         result["end"] = end
+        result["lower_low_exclude_count"] = lower_low_box.current()
         win.destroy()
 
     def on_cancel():
@@ -82,9 +89,9 @@ def select_date_range() -> Optional[Tuple[str, str]]:
     tk.Button(btn_frame, text="キャンセル", width=10, command=on_cancel).pack(side=tk.LEFT, padx=8)
     win.mainloop()
 
-    if result["start"] is None or result["end"] is None:
+    if result["start"] is None or result["end"] is None or result["lower_low_exclude_count"] is None:
         return None
-    return result["start"], result["end"]
+    return result["start"], result["end"], result["lower_low_exclude_count"]
 
 
 def show_completion_message(signals_path: Path, summary_path: Path) -> None:

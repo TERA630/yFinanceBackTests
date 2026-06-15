@@ -86,6 +86,12 @@ def can_promote_soft_fails(reason_items: List[ReasonItem]) -> bool:
         return True
     return all(is_recoverable_soft_reason(x) for x in softs)
 
+
+def is_lower_low_excluded(lower_low_count: int, exclusion_count: int) -> bool:
+    if exclusion_count not in (0, 1, 2, 3):
+        raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
+    return exclusion_count > 0 and lower_low_count >= exclusion_count
+
 def estimate_entry_limits(ma25: Optional[float], close: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
     if ma25 is None:
         return None, None
@@ -193,7 +199,10 @@ def evaluate_row_a7r2(
     row: pd.Series,
     prev3: pd.DataFrame,
     fundamentals: dict,
+    *,
+    lower_low_exclude_count: int = 0,
 ) -> ScreenResult:
+    is_lower_low_excluded(0, lower_low_exclude_count)
     close = safe_float(row["Close"])
     ma5 = safe_float(row["MA5"])
     ma25 = safe_float(row["MA25"])
@@ -332,12 +341,15 @@ def evaluate_row_a7r2(
     if len(prev3) >= 3:
         lower_low_count = int(prev3["LowerLow"].fillna(False).sum())
         bear_count = int(prev3["IsBear"].fillna(False).sum())
-        if lower_low_count >= 3:
+        if is_lower_low_excluded(lower_low_count, lower_low_exclude_count):
             hard_fail = True
-            add_reason(reason_items, "押し目未完成", "直近3日で安値切り下げが続きすぎ", is_hard=True, priority=4)
-        elif lower_low_count == 2:
-            soft_fail_count += 1
-            add_reason(reason_items, "押し目未完成", "直近3日で安値切り下げが続く", is_hard=False, priority=4)
+            add_reason(
+                reason_items,
+                "押し目未完成",
+                f"直近3日で安値切り下げ{lower_low_count}回（除外基準{lower_low_exclude_count}回以上）",
+                is_hard=True,
+                priority=4,
+            )
         if bear_count >= 3:
             hard_fail = True
             add_reason(reason_items, "押し目未完成", "陰線が連続しすぎ", is_hard=True, priority=5)
@@ -478,6 +490,9 @@ def evaluate_row_a7r2(
 class A7R2EntryRule:
     name = "a7r2"
 
+    def __init__(self, lower_low_exclude_count: int = 0):
+        self.lower_low_exclude_count = lower_low_exclude_count
+
     def evaluate(
         self,
         name: str,
@@ -487,4 +502,12 @@ class A7R2EntryRule:
         prev3: pd.DataFrame,
         fundamentals: dict,
     ) -> ScreenResult:
-        return evaluate_row_a7r2(name, code, trade_date, row, prev3, fundamentals)
+        return evaluate_row_a7r2(
+            name,
+            code,
+            trade_date,
+            row,
+            prev3,
+            fundamentals,
+            lower_low_exclude_count=self.lower_low_exclude_count,
+        )

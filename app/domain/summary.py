@@ -25,8 +25,18 @@ def summarize_signals(df: pd.DataFrame) -> pd.DataFrame:
         for w in WINDOWS:
             up = pd.to_numeric(g[f"max_up_{w}d_pct"], errors="coerce")
             dd = pd.to_numeric(g[f"max_dd_{w}d_pct"], errors="coerce")
-            record[f"avg_max_up_{w}d_pct"] = float(up.mean()) if not up.dropna().empty else np.nan
-            record[f"avg_max_dd_{w}d_pct"] = float(dd.mean()) if not dd.dropna().empty else np.nan
+            valid_up = up.dropna()
+            valid_dd = dd.dropna()
+            record[f"avg_max_up_{w}d_pct"] = float(valid_up.mean()) if not valid_up.empty else np.nan
+            record[f"avg_max_dd_{w}d_pct"] = float(valid_dd.mean()) if not valid_dd.empty else np.nan
+            record[f"median_mfe_{w}d_pct"] = float(valid_up.median()) if not valid_up.empty else np.nan
+            record[f"median_mae_{w}d_pct"] = float(valid_dd.median()) if not valid_dd.empty else np.nan
+            record[f"adverse_3pct_rate_{w}d_pct"] = (
+                float((valid_dd <= -3.0).mean() * 100.0) if not valid_dd.empty else np.nan
+            )
+            record[f"reach_5pct_rate_{w}d_pct"] = (
+                float((valid_up >= 5.0).mean() * 100.0) if not valid_up.empty else np.nan
+            )
 
         summaries.append(record)
 

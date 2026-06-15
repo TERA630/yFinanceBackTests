@@ -10,7 +10,7 @@ import pandas as pd
 
 from app.data.yfinance_repository import fetch_fundamentals_once, fetch_raw_price_map
 from app.domain.config import HORIZONS, WINDOWS
-from app.domain.entry_rules.a7r2 import evaluate_row_a7r2, summarize_reasons
+from app.domain.entry_rules.a7r2 import evaluate_row_a7r2, is_lower_low_excluded, summarize_reasons
 from app.domain.indicators import compute_indicators
 from app.domain.models import ReasonItem, ScreenResult
 from app.domain.post_entry_metrics import (
@@ -29,7 +29,14 @@ def bulk_download_prices(watchlist: List[Tuple[str, str]], start_date: str, end_
     return {code: compute_indicators(df) for code, df in raw_price_map.items()}
 
 
-def run_backtest_A7R2(stock_md_path: Path, start_date: str, end_date: str):
+def run_backtest_A7R2(
+    stock_md_path: Path,
+    start_date: str,
+    end_date: str,
+    *,
+    lower_low_exclude_count: int = 0,
+):
+    is_lower_low_excluded(0, lower_low_exclude_count)
     watchlist = load_watchlist(stock_md_path)
     dates = business_days(start_date, end_date)
     date_index = pd.DatetimeIndex(dates)
@@ -118,11 +125,21 @@ def run_backtest_A7R2(stock_md_path: Path, start_date: str, end_date: str):
             else:
                 row = price_df.loc[trade_dt]
                 prev3 = prev3_caches[code].get(pd.Timestamp(trade_dt), pd.DataFrame())
-                result = evaluate_row_a7r2(name, code, pd.Timestamp(trade_dt), row, prev3, fundamentals)
+                result = evaluate_row_a7r2(
+                    name,
+                    code,
+                    pd.Timestamp(trade_dt),
+                    row,
+                    prev3,
+                    fundamentals,
+                    lower_low_exclude_count=lower_low_exclude_count,
+                )
                 future_metrics = forward_metric_maps[code].get(pd.Timestamp(trade_dt), {})
 
             signal_rows.append(make_signal_record(result, dt, future_metrics))
 
     signals_df = pd.DataFrame(signal_rows)
     summary_df = summarize_signals(signals_df)
+    if not summary_df.empty:
+        summary_df.insert(1, "lower_low_exclude_count", lower_low_exclude_count)
     return signals_df, summary_df

@@ -16,8 +16,13 @@ def main():
     if resolved is None:
         return
 
-    stock_md_path, start_date, end_date, out_dir = resolved
-    signals_df, summary_df = run_backtest_A7R2(stock_md_path, start_date, end_date)
+    stock_md_path, start_date, end_date, out_dir, lower_low_exclude_count = resolved
+    signals_df, summary_df = run_backtest_A7R2(
+        stock_md_path,
+        start_date,
+        end_date,
+        lower_low_exclude_count=lower_low_exclude_count,
+    )
     signals_path, summary_path = save_outputs(out_dir, start_date, end_date, signals_df, summary_df)
 
     print("")
