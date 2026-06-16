@@ -12,9 +12,8 @@ from app.domain.vwap_backtest import EXCURSION_WINDOWS, HORIZONS
 
 def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%m-%d-%H-%M")
-    summary_path = out_dir / f"backtest_a8_summary-{timestamp}.md"
-    result_path = out_dir / f"backtest_a8_result-{timestamp}.md"
+    timestamp = datetime.now().strftime("%m-%d-%H-%M-%S")
+    summary_path, result_path = _report_paths(out_dir, timestamp)
     summary_path.write_text(_summary_markdown(summary), encoding="utf-8")
     result_path.write_text(_result_markdown(trades, summary), encoding="utf-8")
     return summary_path, result_path
@@ -23,6 +22,18 @@ def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple
 def save_vwap_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for the former VWAP report writer."""
     return save_a8_reports(out_dir, trades, summary)
+
+
+def _report_paths(out_dir: Path, timestamp: str) -> tuple[Path, Path]:
+    suffix = ""
+    index = 1
+    while True:
+        summary_path = out_dir / f"backtest_a8_summary-{timestamp}{suffix}.md"
+        result_path = out_dir / f"backtest_a8_result-{timestamp}{suffix}.md"
+        if not summary_path.exists() and not result_path.exists():
+            return summary_path, result_path
+        index += 1
+        suffix = f"_{index}"
 
 
 def _summary_markdown(summary: dict) -> str:

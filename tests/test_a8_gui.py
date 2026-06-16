@@ -1,8 +1,10 @@
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
-from app.presentation.a8_gui import default_date_range
+from app.domain.vwap_backtest import A8BacktestConfig, ENTRY_1100, ENTRY_1400, ENTRY_PREV_CLOSE
+from app.presentation.a8_gui import A8GuiInput, append_saved_condition, default_date_range, summarize_condition
 
 
 class A8GuiDateDefaultsTests(unittest.TestCase):
@@ -17,6 +19,71 @@ class A8GuiDateDefaultsTests(unittest.TestCase):
 
         self.assertEqual(end, pd.Timestamp("2026-06-12"))
         self.assertEqual(len(pd.bdate_range(start, end)), 41)
+
+
+class A8GuiSavedConditionTests(unittest.TestCase):
+    def test_saved_condition_queue_keeps_latest_three(self):
+        queue = []
+        for index in range(4):
+            append_saved_condition(
+                queue,
+                A8GuiInput(
+                    Path(f"stock_{index}.md"),
+                    Path("."),
+                    A8BacktestConfig(
+                        "2026-06-01",
+                        "2026-06-10",
+                        -5.0 + index,
+                        5.0,
+                        ENTRY_1100,
+                    ),
+                ),
+            )
+
+        self.assertEqual(len(queue), 3)
+        self.assertEqual(queue[0].stock_file, Path("stock_1.md"))
+        self.assertEqual(queue[-1].stock_file, Path("stock_3.md"))
+
+    def test_condition_summary_excludes_paths_and_dates(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -3.5,
+                    4.0,
+                    ENTRY_1400,
+                    lower_low_exclude_count=2,
+                    require_vwap_confirmation=False,
+                ),
+            )
+        )
+
+        self.assertIn("25日乖離 -3.5%超-4%以下", summary)
+        self.assertIn("VWAPなし", summary)
+        self.assertIn("14:00", summary)
+        self.assertIn("安値2回以上除外", summary)
+        self.assertNotIn("watchlist", summary)
+        self.assertNotIn("2026-06", summary)
+
+    def test_prev_close_condition_summary_uses_japanese_label(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_PREV_CLOSE,
+                ),
+            )
+        )
+
+        self.assertIn("前日終値", summary)
 
 
 if __name__ == "__main__":
