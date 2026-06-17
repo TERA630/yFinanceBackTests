@@ -31,7 +31,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     print("[2/3] 5分足データ取得")
     intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
-    print("[3/3] A8バックテスト")
+    print("[3/3] A9r2バックテスト")
 
     records: List[dict] = []
     skipped = Counter()
@@ -201,13 +201,10 @@ def build_summary(
     }
     for horizon in HORIZONS:
         return_column = f"return_{horizon}d_pct"
-        profit_column = f"profit_loss_{horizon}d"
         values = pd.to_numeric(trades.get(return_column, pd.Series(dtype=float)), errors="coerce").dropna()
-        profits = pd.to_numeric(trades.get(profit_column, pd.Series(dtype=float)), errors="coerce").dropna()
         summary[f"completed_{horizon}d"] = int(len(values))
         summary[f"win_rate_{horizon}d_pct"] = None if values.empty else float((values > 0).mean() * 100.0)
         summary[f"average_return_{horizon}d_pct"] = None if values.empty else float(values.mean())
-        summary[f"total_profit_loss_{horizon}d"] = None if profits.empty else float(profits.sum())
 
     for window in EXCURSION_WINDOWS:
         maes = pd.to_numeric(
@@ -225,6 +222,14 @@ def build_summary(
         )
         summary[f"reach_5pct_rate_{window}d_pct"] = (
             None if mfes.empty else float((mfes >= 5.0).mean() * 100.0)
+        )
+        first_touches = trades.get(f"first_touch_{window}d", pd.Series(dtype=object)).dropna()
+        decided = first_touches[first_touches.isin(["plus_5pct", "minus_3pct"])]
+        summary[f"first_reach_5pct_rate_{window}d_pct"] = (
+            None if decided.empty else float((decided == "plus_5pct").mean() * 100.0)
+        )
+        summary[f"first_adverse_3pct_rate_{window}d_pct"] = (
+            None if decided.empty else float((decided == "minus_3pct").mean() * 100.0)
         )
 
     # Compatibility keys retained for existing report consumers.

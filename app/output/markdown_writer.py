@@ -10,7 +10,7 @@ import pandas as pd
 from app.domain.vwap_backtest import EXCURSION_WINDOWS, HORIZONS
 
 
-def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
+def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%m-%d-%H-%M-%S")
     summary_path, result_path = _report_paths(out_dir, timestamp)
@@ -19,17 +19,22 @@ def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple
     return summary_path, result_path
 
 
+def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
+    """Compatibility alias for callers using the former A8 report name."""
+    return save_a9r2_reports(out_dir, trades, summary)
+
+
 def save_vwap_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for the former VWAP report writer."""
-    return save_a8_reports(out_dir, trades, summary)
+    return save_a9r2_reports(out_dir, trades, summary)
 
 
 def _report_paths(out_dir: Path, timestamp: str) -> tuple[Path, Path]:
     suffix = ""
     index = 1
     while True:
-        summary_path = out_dir / f"backtest_a8_summary-{timestamp}{suffix}.md"
-        result_path = out_dir / f"backtest_a8_result-{timestamp}{suffix}.md"
+        summary_path = out_dir / f"backtest_a9r2_summary-{timestamp}{suffix}.md"
+        result_path = out_dir / f"backtest_a9r2_result-{timestamp}{suffix}.md"
         if not summary_path.exists() and not result_path.exists():
             return summary_path, result_path
         index += 1
@@ -38,7 +43,7 @@ def _report_paths(out_dir: Path, timestamp: str) -> tuple[Path, Path]:
 
 def _summary_markdown(summary: dict) -> str:
     lines = [
-        "# A8バックテスト サマリー",
+        "# A9r2バックテスト サマリー",
         "",
         "## 実行条件",
         "",
@@ -55,41 +60,31 @@ def _summary_markdown(summary: dict) -> str:
         f"- 評価件数: {summary['evaluated_count']}",
         f"- エントリー件数: {summary['entry_count']}",
         "",
-        "## 主要指標（5営業日）",
+        "## 主項目",
         "",
-        f"- 5営業日後リターン: {_percent(summary['average_return_5d_pct'])}",
-        f"- 最大含み損 平均: {_percent(summary['average_max_drawdown_5d_pct'])}",
-        f"- 最大含み損 中央値: {_percent(summary['median_max_drawdown_5d_pct'])}",
-        f"- 最大順行(MFE)中央値: {_percent(summary['median_mfe_5d_pct'])}",
-        f"- 最大逆行(MAE)中央値: {_percent(summary['median_mae_5d_pct'])}",
-        f"- -3%逆行率: {_percent(summary['adverse_3pct_rate_5d_pct'])}",
-        f"- +5%到達率: {_percent(summary['reach_5pct_rate_5d_pct'])}",
-        "",
-        "## MFE・MAE解析",
-        "",
-        "| 評価期間 | MFE中央値 | MAE中央値 | -3%逆行率 | +5%到達率 |",
-        "|---:|---:|---:|---:|---:|",
+        "| 評価期間 | +5%到達率 | -3%到達率 | MFE中央値 | MAE中央値 | +5%先着率 | -3%先着率 |",
+        "|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for window in EXCURSION_WINDOWS:
         lines.append(
-            f"| {window}営業日 | {_percent(summary[f'median_mfe_{window}d_pct'])} | "
-            f"{_percent(summary[f'median_mae_{window}d_pct'])} | "
+            f"| {window}営業日 | {_percent(summary[f'reach_5pct_rate_{window}d_pct'])} | "
             f"{_percent(summary[f'adverse_3pct_rate_{window}d_pct'])} | "
-            f"{_percent(summary[f'reach_5pct_rate_{window}d_pct'])} |"
+            f"{_percent(summary[f'median_mfe_{window}d_pct'])} | "
+            f"{_percent(summary[f'median_mae_{window}d_pct'])} | "
+            f"{_percent(summary[f'first_reach_5pct_rate_{window}d_pct'])} | "
+            f"{_percent(summary[f'first_adverse_3pct_rate_{window}d_pct'])} |"
         )
     lines.extend([
         "",
-        "## 成績",
+        "## 副項目",
         "",
-        "| 売却時期 | 評価可能件数 | 勝率 | 平均損益率 | 合計損益 |",
-        "|---:|---:|---:|---:|---:|",
+        "| 売却時期 | 評価可能件数 | 勝率 |",
+        "|---:|---:|---:|",
     ])
     for horizon in HORIZONS:
         lines.append(
             f"| {horizon}営業日後 | {summary[f'completed_{horizon}d']} | "
-            f"{_percent(summary[f'win_rate_{horizon}d_pct'])} | "
-            f"{_percent(summary[f'average_return_{horizon}d_pct'])} | "
-            f"{_price(summary[f'total_profit_loss_{horizon}d'])} |"
+            f"{_percent(summary[f'win_rate_{horizon}d_pct'])} |"
         )
     lines.extend(["", "## スキップ内訳", ""])
     skipped = summary.get("skipped", {})
@@ -103,7 +98,7 @@ def _summary_markdown(summary: dict) -> str:
 
 def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
     lines = [
-        "# A8バックテスト 個別結果",
+        "# A9r2バックテスト 個別結果",
         "",
         f"対象期間: {summary['start_date']} ～ {summary['end_date']}",
         "",
@@ -143,15 +138,16 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             )
         lines.extend([
             "",
-            "| 評価期間 | 最高値 | MFE | 最低値 | 最大含み損 | MAE |",
-            "|---:|---:|---:|---:|---:|---:|",
+            "| 評価期間 | 最高値 | MFE | 最低値 | 最大含み損 | MAE | 先着 |",
+            "|---:|---:|---:|---:|---:|---:|---:|",
         ])
         for window in EXCURSION_WINDOWS:
             lines.append(
                 f"| {window}営業日 | {_price(row[f'maximum_price_{window}d'])} | "
                 f"{_percent(row[f'max_favorable_excursion_{window}d_pct'])} | "
                 f"{_price(row[f'minimum_price_{window}d'])} | "
-                f"{_price(row[f'max_drawdown_{window}d'])} | {_percent(row[f'max_drawdown_{window}d_pct'])} |"
+                f"{_price(row[f'max_drawdown_{window}d'])} | {_percent(row[f'max_drawdown_{window}d_pct'])} | "
+                f"{_first_touch(row.get(f'first_touch_{window}d'))} |"
             )
         lines.append("")
     return "\n".join(lines)
@@ -163,6 +159,14 @@ def _entry_label(value: str) -> str:
 
 def _range_condition(value) -> str:
     return "考慮せず" if value is None or pd.isna(value) else f"{float(value):g}%以上"
+
+
+def _first_touch(value) -> str:
+    if value == "plus_5pct":
+        return "+5%"
+    if value == "minus_3pct":
+        return "-3%"
+    return "N/A"
 
 
 def _price(value) -> str:

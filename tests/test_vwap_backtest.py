@@ -11,6 +11,7 @@ from app.domain.vwap_backtest import (
     build_trade_metrics,
     calculate_range_position_pct,
     calculate_vwap,
+    first_threshold_touch,
     intraday_entry,
     intraday_range_position_pct,
 )
@@ -97,12 +98,12 @@ class RangePositionTest(unittest.TestCase):
 
 class TradeMetricsTest(unittest.TestCase):
     def test_future_closes_and_drawdown_are_based_on_entry_price(self):
-        index = pd.bdate_range("2026-05-01", periods=22)
+        index = pd.bdate_range("2026-05-01", periods=17)
         daily = pd.DataFrame(
             {
-                "Close": [100.0] + [101.0, 102.0, 103.0, 104.0, 105.0] + [110.0] * 14 + [120.0, 121.0],
-                "High": [101.0] + [102.0, 103.0, 104.0, 105.0, 106.0] + [111.0] * 14 + [121.0, 122.0],
-                "Low": [99.0] + [98.0, 97.0, 96.0, 95.0, 94.0] + [93.0] * 16,
+                "Close": [100.0] + [101.0, 102.0, 103.0, 104.0, 105.0] + [110.0] * 9 + [115.0, 116.0],
+                "High": [101.0] + [102.0, 103.0, 104.0, 105.0, 106.0] + [111.0] * 9 + [116.0, 117.0],
+                "Low": [99.0] + [98.0, 97.0, 96.0, 95.0, 94.0] + [93.0] * 11,
             },
             index=index,
         )
@@ -110,13 +111,14 @@ class TradeMetricsTest(unittest.TestCase):
         self.assertEqual(metrics["sell_price_1d"], 101.0)
         self.assertEqual(metrics["sell_price_5d"], 105.0)
         self.assertEqual(metrics["sell_price_10d"], 110.0)
-        self.assertEqual(metrics["sell_price_20d"], 120.0)
+        self.assertEqual(metrics["sell_price_15d"], 115.0)
         self.assertEqual(metrics["minimum_price_5d"], 94.0)
         self.assertEqual(metrics["max_drawdown_5d"], -6.0)
-        self.assertEqual(metrics["minimum_price_20d"], 93.0)
-        self.assertEqual(metrics["max_drawdown_20d"], -7.0)
+        self.assertEqual(metrics["minimum_price_15d"], 93.0)
+        self.assertEqual(metrics["max_drawdown_15d"], -7.0)
         self.assertAlmostEqual(metrics["max_favorable_excursion_5d_pct"], 6.0)
-        self.assertAlmostEqual(metrics["max_favorable_excursion_20d_pct"], 21.0)
+        self.assertAlmostEqual(metrics["max_favorable_excursion_15d_pct"], 16.0)
+        self.assertEqual(metrics["first_touch_5d"], "minus_3pct")
 
     def test_drawdown_is_zero_when_all_future_lows_are_above_entry(self):
         index = pd.bdate_range("2026-05-01", periods=6)
@@ -124,7 +126,33 @@ class TradeMetricsTest(unittest.TestCase):
         metrics = build_trade_metrics(daily, index[0], 100.0)
         self.assertEqual(metrics["max_drawdown_5d"], 0.0)
         self.assertEqual(metrics["max_drawdown_5d_pct"], 0.0)
-        self.assertIsNone(metrics["max_drawdown_20d"])
+        self.assertIsNone(metrics["max_drawdown_15d"])
+
+    def test_first_threshold_touch_uses_the_first_reached_threshold(self):
+        index = pd.bdate_range("2026-05-01", periods=6)
+        daily = pd.DataFrame(
+            {
+                "Close": [100.0] * 6,
+                "High": [100.0, 104.0, 106.0, 101.0, 101.0, 101.0],
+                "Low": [100.0, 99.0, 99.0, 96.0, 99.0, 99.0],
+            },
+            index=index,
+        )
+
+        self.assertEqual(first_threshold_touch(daily, 0, 100.0, 5), "plus_5pct")
+
+    def test_first_threshold_touch_ignores_same_day_double_touch(self):
+        index = pd.bdate_range("2026-05-01", periods=6)
+        daily = pd.DataFrame(
+            {
+                "Close": [100.0] * 6,
+                "High": [100.0, 106.0, 101.0, 101.0, 101.0, 101.0],
+                "Low": [100.0, 96.0, 99.0, 99.0, 99.0, 99.0],
+            },
+            index=index,
+        )
+
+        self.assertIsNone(first_threshold_touch(daily, 0, 100.0, 5))
 
 
 class SummaryTest(unittest.TestCase):
@@ -137,9 +165,11 @@ class SummaryTest(unittest.TestCase):
                 "profit_loss_5d": [20.0, None, None],
                 "return_10d_pct": [3.0, -2.0, None],
                 "profit_loss_10d": [30.0, -20.0, None],
+                "return_15d_pct": [4.0, None, None],
+                "profit_loss_15d": [40.0, None, None],
                 "max_drawdown_5d_pct": [-2.0, -3.0, -4.0],
-                "return_20d_pct": [None, None, None],
-                "profit_loss_20d": [None, None, None],
+                "max_favorable_excursion_5d_pct": [6.0, 1.0, 7.0],
+                "first_touch_5d": ["plus_5pct", "minus_3pct", None],
             }
         )
         config = VwapBacktestConfig("2026-06-01", "2026-06-10", -5.0, 5.0, "11:00")
@@ -148,11 +178,14 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(summary["win_rate_1d_pct"], 50.0)
         self.assertEqual(summary["completed_10d"], 2)
         self.assertEqual(summary["win_rate_10d_pct"], 50.0)
-        self.assertEqual(summary["completed_20d"], 0)
-        self.assertIsNone(summary["win_rate_20d_pct"])
+        self.assertEqual(summary["completed_15d"], 1)
+        self.assertEqual(summary["win_rate_15d_pct"], 100.0)
         self.assertEqual(summary["average_max_drawdown_5d_pct"], -3.0)
         self.assertEqual(summary["median_max_drawdown_5d_pct"], -3.0)
         self.assertAlmostEqual(summary["adverse_3pct_rate_5d_pct"], 200.0 / 3.0)
+        self.assertAlmostEqual(summary["reach_5pct_rate_5d_pct"], 200.0 / 3.0)
+        self.assertEqual(summary["first_reach_5pct_rate_5d_pct"], 50.0)
+        self.assertEqual(summary["first_adverse_3pct_rate_5d_pct"], 50.0)
 
     def test_summary_markdown_contains_five_day_key_metrics(self):
         trades = pd.DataFrame(
@@ -163,22 +196,20 @@ class SummaryTest(unittest.TestCase):
                 "profit_loss_5d": [4.5],
                 "return_10d_pct": [6.0],
                 "profit_loss_10d": [6.0],
+                "return_15d_pct": [7.0],
+                "profit_loss_15d": [7.0],
                 "max_drawdown_5d_pct": [-3.5],
                 "max_favorable_excursion_5d_pct": [6.0],
-                "return_20d_pct": [5.0],
-                "profit_loss_20d": [5.0],
+                "first_touch_5d": ["plus_5pct"],
             }
         )
         config = VwapBacktestConfig("2026-06-01", "2026-06-10", -5.0, 5.0, "11:00")
         summary = build_summary(trades, config, stock_count=1, evaluated=1, skipped={})
         markdown = _summary_markdown(summary)
-        self.assertIn("5営業日後リターン: 4.50%", markdown)
-        self.assertIn("最大含み損 平均: -3.50%", markdown)
-        self.assertIn("最大含み損 中央値: -3.50%", markdown)
-        self.assertIn("-3%逆行率: 100.00%", markdown)
-        self.assertIn("最大順行(MFE)中央値: 6.00%", markdown)
-        self.assertIn("+5%到達率: 100.00%", markdown)
-        self.assertIn("| 10営業日後 | 1 | 100.00% | 6.00% | 6.00円 |", markdown)
+        self.assertIn("# A9r2バックテスト サマリー", markdown)
+        self.assertIn("| 5営業日 | 100.00% | 100.00% | 6.00% | -3.50% | 100.00% | 0.00% |", markdown)
+        self.assertIn("| 10営業日後 | 1 | 100.00% |", markdown)
+        self.assertNotIn("合計損益", markdown)
 
 
 class LowerLowTest(unittest.TestCase):

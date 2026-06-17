@@ -12,8 +12,8 @@ ENTRY_PREV_CLOSE = "prev_close"
 ENTRY_1100 = "11:00"
 ENTRY_1400 = "14:00"
 ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_1100, ENTRY_1400)
-HORIZONS = (1, 5, 10, 20)
-EXCURSION_WINDOWS = (5, 10, 20)
+HORIZONS = (1, 5, 10, 15)
+EXCURSION_WINDOWS = (5, 10, 15)
 
 
 @dataclass(frozen=True)
@@ -164,6 +164,7 @@ def build_trade_metrics(daily: pd.DataFrame, entry_date: pd.Timestamp, entry_pri
             metrics[f"max_drawdown_{window}d"] = None
             metrics[f"max_drawdown_{window}d_pct"] = None
             metrics[f"max_favorable_excursion_{window}d_pct"] = None
+            metrics[f"first_touch_{window}d"] = None
             continue
         lows = pd.to_numeric(daily["Low"].iloc[pos + 1:pos + window + 1], errors="coerce").dropna()
         high_source = daily["High"] if "High" in daily.columns else daily["Close"]
@@ -179,6 +180,7 @@ def build_trade_metrics(daily: pd.DataFrame, entry_date: pd.Timestamp, entry_pri
         metrics[f"max_favorable_excursion_{window}d_pct"] = (
             None if maximum is None else max(0.0, (maximum / entry_price - 1.0) * 100.0)
         )
+        metrics[f"first_touch_{window}d"] = first_threshold_touch(daily, pos, entry_price, window)
     return metrics
 
 
@@ -194,7 +196,35 @@ def empty_trade_metrics() -> dict:
         metrics[f"max_drawdown_{window}d"] = None
         metrics[f"max_drawdown_{window}d_pct"] = None
         metrics[f"max_favorable_excursion_{window}d_pct"] = None
+        metrics[f"first_touch_{window}d"] = None
     return metrics
+
+
+def first_threshold_touch(
+    daily: pd.DataFrame,
+    entry_position: int,
+    entry_price: float,
+    window: int,
+) -> Optional[str]:
+    if entry_position < 0 or entry_price <= 0:
+        return None
+    if entry_position + window >= len(daily):
+        return None
+    plus_target = entry_price * 1.05
+    minus_target = entry_price * 0.97
+    high_source = daily["High"] if "High" in daily.columns else daily["Close"]
+    for offset in range(1, window + 1):
+        high = _float_or_none(high_source.iloc[entry_position + offset])
+        low = _float_or_none(daily["Low"].iloc[entry_position + offset])
+        reached_plus = high is not None and high >= plus_target
+        reached_minus = low is not None and low <= minus_target
+        if reached_plus and reached_minus:
+            return None
+        if reached_plus:
+            return "plus_5pct"
+        if reached_minus:
+            return "minus_3pct"
+    return None
 
 
 def _float_or_none(value) -> Optional[float]:
