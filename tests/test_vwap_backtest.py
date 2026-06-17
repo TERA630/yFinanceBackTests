@@ -15,7 +15,7 @@ from app.domain.vwap_backtest import (
     intraday_entry,
     intraday_range_position_pct,
 )
-from app.output.markdown_writer import _summary_markdown
+from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
 from app.usecases.run_vwap_backtest import _lower_low_count, build_summary, run_vwap_backtest
 from app.domain.vwap_backtest import VwapBacktestConfig
 
@@ -210,6 +210,96 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("| 5営業日 | 100.00% | 100.00% | 6.00% | -3.50% | 100.00% | 0.00% |", markdown)
         self.assertIn("| 10営業日後 | 1 | 100.00% |", markdown)
         self.assertNotIn("合計損益", markdown)
+
+    def test_report_paths_include_me25_condition_date_and_sequence(self):
+        config = VwapBacktestConfig("2026-06-01", "2026-06-10", -1.0, 2.0, "11:00")
+        summary = build_summary(pd.DataFrame(), config, stock_count=1, evaluated=0, skipped={})
+
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            first_summary, first_result = _report_paths(out_dir, summary, "06-17")
+            first_summary.write_text("", encoding="utf-8")
+            first_result.write_text("", encoding="utf-8")
+            second_summary, second_result = _report_paths(out_dir, summary, "06-17")
+
+        self.assertEqual(first_summary.name, "bt_v9r2_ME25(-1,2)-06-17_summary-1.md")
+        self.assertEqual(first_result.name, "bt_v9r2_ME25(-1,2)-06-17_result-1.md")
+        self.assertEqual(second_summary.name, "bt_v9r2_ME25(-1,2)-06-17_summary-2.md")
+        self.assertEqual(second_result.name, "bt_v9r2_ME25(-1,2)-06-17_result-2.md")
+
+    def test_result_markdown_shows_conditions_and_hides_entry_only_rows(self):
+        trades = pd.DataFrame(
+            [
+                {
+                    "entry_date": "2026-06-03",
+                    "signal_date": "2026-06-02",
+                    "name": "表示銘柄",
+                    "code": "1111",
+                    "entry_time": "11:00",
+                    "vwap_confirmation_required": True,
+                    "previous_close": 100.0,
+                    "previous_ma25": 100.0,
+                    "previous_dev25_pct": 0.0,
+                    "lower_low_count_3d": 0,
+                    "entry_price": 101.0,
+                    "entry_range_position_pct": 50.0,
+                    "entry_ma5": 100.0,
+                    "ma5_slope_pct": 1.0,
+                    "entry_ma25": 100.0,
+                    "entry_dev25_pct": 1.0,
+                    "ma25_slope_pct": 0.5,
+                    "vwap": 100.0,
+                    "vwap_margin_pct": 1.0,
+                    "sell_price_1d": 102.0,
+                    "profit_loss_1d": 1.0,
+                    "return_1d_pct": 0.99,
+                    "sell_price_5d": 106.0,
+                    "profit_loss_5d": 5.0,
+                    "return_5d_pct": 4.95,
+                    "sell_price_10d": None,
+                    "profit_loss_10d": None,
+                    "return_10d_pct": None,
+                    "sell_price_15d": None,
+                    "profit_loss_15d": None,
+                    "return_15d_pct": None,
+                    "maximum_price_5d": 108.0,
+                    "max_favorable_excursion_5d_pct": 6.93,
+                    "minimum_price_5d": 98.0,
+                    "max_drawdown_5d": -3.0,
+                    "max_drawdown_5d_pct": -2.97,
+                    "first_touch_5d": "plus_5pct",
+                    "maximum_price_10d": None,
+                    "max_favorable_excursion_10d_pct": None,
+                    "minimum_price_10d": None,
+                    "max_drawdown_10d": None,
+                    "max_drawdown_10d_pct": None,
+                    "first_touch_10d": None,
+                    "maximum_price_15d": None,
+                    "max_favorable_excursion_15d_pct": None,
+                    "minimum_price_15d": None,
+                    "max_drawdown_15d": None,
+                    "max_drawdown_15d_pct": None,
+                    "first_touch_15d": None,
+                },
+                {
+                    "entry_date": "2026-06-04",
+                    "signal_date": "2026-06-03",
+                    "name": "非表示銘柄",
+                    "code": "2222",
+                    "return_5d_pct": None,
+                },
+            ]
+        )
+        config = VwapBacktestConfig("2026-06-01", "2026-06-10", -1.0, 2.0, "11:00")
+        summary = build_summary(trades, config, stock_count=2, evaluated=2, skipped={})
+
+        markdown = _result_markdown(trades, summary)
+
+        self.assertIn("## 実行条件", markdown)
+        self.assertIn("- 前日・当日25日乖離率: -1.0% < 乖離率 <= 2.0%", markdown)
+        self.assertIn("- エントリーのみ: 1件", markdown)
+        self.assertIn("表示銘柄", markdown)
+        self.assertNotIn("非表示銘柄", markdown)
 
 
 class LowerLowTest(unittest.TestCase):

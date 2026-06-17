@@ -12,8 +12,8 @@ from app.domain.vwap_backtest import EXCURSION_WINDOWS, HORIZONS
 
 def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%m-%d-%H-%M-%S")
-    summary_path, result_path = _report_paths(out_dir, timestamp)
+    report_date = datetime.now().strftime("%m-%d")
+    summary_path, result_path = _report_paths(out_dir, summary, report_date)
     summary_path.write_text(_summary_markdown(summary), encoding="utf-8")
     result_path.write_text(_result_markdown(trades, summary), encoding="utf-8")
     return summary_path, result_path
@@ -29,16 +29,15 @@ def save_vwap_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tup
     return save_a9r2_reports(out_dir, trades, summary)
 
 
-def _report_paths(out_dir: Path, timestamp: str) -> tuple[Path, Path]:
-    suffix = ""
+def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path, Path]:
+    condition = _filename_condition(summary)
     index = 1
     while True:
-        summary_path = out_dir / f"backtest_a9r2_summary-{timestamp}{suffix}.md"
-        result_path = out_dir / f"backtest_a9r2_result-{timestamp}{suffix}.md"
+        summary_path = out_dir / f"bt_v9r2_{condition}-{report_date}_summary-{index}.md"
+        result_path = out_dir / f"bt_v9r2_{condition}-{report_date}_result-{index}.md"
         if not summary_path.exists() and not result_path.exists():
             return summary_path, result_path
         index += 1
-        suffix = f"_{index}"
 
 
 def _summary_markdown(summary: dict) -> str:
@@ -47,18 +46,7 @@ def _summary_markdown(summary: dict) -> str:
         "",
         "## 実行条件",
         "",
-        f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
-        f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
-        "- 25日線傾き: 横ばい以上（0%以上）",
-        f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
-        f"- VWAP維持確認: {'あり' if summary['require_vwap_confirmation'] else 'なし'}",
-        f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
-        f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
-        if summary['lower_low_exclude_count'] > 0 else "- 3日間の安値切り下げ除外: なし",
-        f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
-        f"- 監視銘柄数: {summary['stock_count']}",
-        f"- 評価件数: {summary['evaluated_count']}",
-        f"- エントリー件数: {summary['entry_count']}",
+        *_condition_lines(summary),
         "",
         "## 主項目",
         "",
@@ -97,17 +85,25 @@ def _summary_markdown(summary: dict) -> str:
 
 
 def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
+    entry_only_count = _entry_only_count(trades)
+    completed_trades = _completed_result_trades(trades)
     lines = [
         "# A9r2バックテスト 個別結果",
         "",
-        f"対象期間: {summary['start_date']} ～ {summary['end_date']}",
+        "## 実行条件",
+        "",
+        *_condition_lines(summary),
+        f"- エントリーのみ: {entry_only_count}件",
         "",
     ]
     if trades.empty:
         lines.extend(["エントリー対象銘柄はありませんでした。", ""])
         return "\n".join(lines)
 
-    for _, row in trades.iterrows():
+    if completed_trades.empty:
+        return "\n".join(lines)
+
+    for _, row in completed_trades.iterrows():
         lines.extend([
             f"## {row['entry_date']} {row['name']} ({row['code']})",
             "",
@@ -151,6 +147,41 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             )
         lines.append("")
     return "\n".join(lines)
+
+
+def _condition_lines(summary: dict) -> list[str]:
+    return [
+        f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
+        f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
+        "- 25日線傾き: 横ばい以上（0%以上）",
+        f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
+        f"- VWAP維持確認: {'あり' if summary['require_vwap_confirmation'] else 'なし'}",
+        f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
+        f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
+        if summary['lower_low_exclude_count'] > 0 else "- 3日間の安値切り下げ除外: なし",
+        f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
+        f"- 監視銘柄数: {summary['stock_count']}",
+        f"- 評価件数: {summary['evaluated_count']}",
+        f"- エントリー件数: {summary['entry_count']}",
+    ]
+
+
+def _completed_result_trades(trades: pd.DataFrame) -> pd.DataFrame:
+    if trades.empty or "return_5d_pct" not in trades:
+        return trades.iloc[0:0].copy()
+    return trades.loc[pd.to_numeric(trades["return_5d_pct"], errors="coerce").notna()].copy()
+
+
+def _entry_only_count(trades: pd.DataFrame) -> int:
+    return int(len(trades) - len(_completed_result_trades(trades)))
+
+
+def _filename_condition(summary: dict) -> str:
+    return f"ME25({_number_label(summary['dev25_min'])},{_number_label(summary['dev25_max'])})"
+
+
+def _number_label(value) -> str:
+    return f"{float(value):g}"
 
 
 def _entry_label(value: str) -> str:
