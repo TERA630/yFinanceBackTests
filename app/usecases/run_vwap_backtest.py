@@ -51,6 +51,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
             row = daily.loc[signal_date]
             previous_close = _number(row.get("Close"))
             ma25 = _number(row.get("MA25"))
+            ma5 = _number(row.get("MA5"))
             if previous_close is None or ma25 in (None, 0):
                 skipped["25日線を計算できない"] += 1
                 continue
@@ -75,6 +76,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 _, vwap = entry
                 entry_ma25 = ma25
                 previous_ma25 = _number(daily["MA25"].iloc[daily_position - 1]) if daily_position > 0 else None
+                entry_ma5 = ma5
+                previous_ma5 = _number(daily["MA5"].iloc[daily_position - 1]) if daily_position > 0 else None
                 range_position_pct = calculate_range_position_pct(
                     _number(row.get("Low")),
                     _number(row.get("High")),
@@ -96,6 +99,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     continue
                 entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
                 previous_ma25 = ma25
+                entry_ma5 = _provisional_ma(daily, daily_position, entry_price, 5)
+                previous_ma5 = ma5
                 range_position_pct = intraday_range_position_pct(
                     intraday,
                     entry_date,
@@ -128,6 +133,17 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["25日線が下向き"] += 1
                 continue
 
+            ma5_slope_pct = None
+            if entry_ma5 not in (None, 0) and previous_ma5 not in (None, 0):
+                ma5_slope_pct = (entry_ma5 / previous_ma5 - 1.0) * 100.0
+            if config.require_ma5_slope_positive:
+                if ma5_slope_pct is None:
+                    skipped["5日線傾きを計算できない"] += 1
+                    continue
+                if ma5_slope_pct <= 0.0:
+                    skipped["5日線が上向きでない"] += 1
+                    continue
+
             if config.require_vwap_confirmation and entry_price < vwap:
                 skipped["VWAP未維持"] += 1
                 continue
@@ -145,6 +161,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "lower_low_count_3d": lower_low_count,
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
+                "entry_ma5": entry_ma5,
+                "ma5_slope_pct": ma5_slope_pct,
                 "entry_ma25": entry_ma25,
                 "entry_dev25_pct": entry_dev25_pct,
                 "ma25_slope_pct": ma25_slope_pct,
@@ -175,6 +193,7 @@ def build_summary(
         "require_vwap_confirmation": config.require_vwap_confirmation,
         "lower_low_exclude_count": config.lower_low_exclude_count,
         "range_position_min_pct": config.range_position_min_pct,
+        "require_ma5_slope_positive": config.require_ma5_slope_positive,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -225,18 +244,23 @@ def _prepare_daily(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     result = df.copy()
     result.index = pd.DatetimeIndex(result.index).normalize()
+    result["MA5"] = pd.to_numeric(result["Close"], errors="coerce").rolling(5).mean()
     result["MA25"] = pd.to_numeric(result["Close"], errors="coerce").rolling(25).mean()
     return result.sort_index()
 
 
 def _provisional_ma25(daily: pd.DataFrame, signal_position: int, entry_price: float):
-    start = signal_position - 23
+    return _provisional_ma(daily, signal_position, entry_price, 25)
+
+
+def _provisional_ma(daily: pd.DataFrame, signal_position: int, entry_price: float, window: int):
+    start = signal_position - (window - 2)
     if start < 0:
         return None
     closes = pd.to_numeric(daily["Close"].iloc[start:signal_position + 1], errors="coerce").dropna()
-    if len(closes) != 24:
+    if len(closes) != window - 1:
         return None
-    return float((closes.sum() + entry_price) / 25.0)
+    return float((closes.sum() + entry_price) / float(window))
 
 
 def _lower_low_count(daily: pd.DataFrame, signal_position: int) -> int:

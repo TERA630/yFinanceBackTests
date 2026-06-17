@@ -49,9 +49,10 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         if config.range_position_min_pct is None
         else f"終端位置{config.range_position_min_pct:g}%以上"
     )
+    ma5_label = "5日線上向き" if config.require_ma5_slope_positive else "5日線条件なし"
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
-        f"{vwap_label} / {entry_label} / {lower_low_label} / {range_label}"
+        f"{vwap_label} / {entry_label} / {lower_low_label} / {range_label} / {ma5_label}"
     )
 
 
@@ -69,7 +70,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A8 バックテスト条件設定")
-    win.geometry("720x690")
+    win.geometry("720x730")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -83,6 +84,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     require_vwap_var = tk.BooleanVar(value=True)
     lower_low_var = tk.StringVar(value="0回")
     range_position_var = tk.StringVar(value="考慮せず")
+    require_ma5_slope_var = tk.BooleanVar(value=False)
     default_start, default_end = default_date_range()
 
     ttk.Label(frame, text="開始日").grid(row=0, column=0, sticky="w", pady=6)
@@ -161,13 +163,19 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=14,
     ).grid(row=9, column=1, sticky="w")
 
+    ttk.Checkbutton(
+        frame,
+        text="5日線傾き > 0 を条件にする",
+        variable=require_ma5_slope_var,
+    ).grid(row=10, column=0, columnspan=2, sticky="w", pady=6)
+
     help_var = tk.StringVar()
     help_label = ttk.Label(
         frame,
         textvariable=help_var,
         foreground="#555555",
     )
-    help_label.grid(row=10, column=0, columnspan=3, sticky="w", pady=(10, 16))
+    help_label.grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 16))
 
     def update_vwap_controls() -> None:
         if require_vwap_var.get():
@@ -191,11 +199,11 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
-    ttk.Label(frame, text="保存済み条件").grid(row=11, column=0, sticky="nw", pady=(8, 4))
+    ttk.Label(frame, text="保存済み条件").grid(row=12, column=0, sticky="nw", pady=(8, 4))
     queue_list = tk.Listbox(frame, width=78, height=5)
-    queue_list.grid(row=11, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    queue_list.grid(row=12, column=1, columnspan=2, sticky="w", pady=(8, 4))
     ttk.Label(frame, textvariable=saved_count_var, foreground="#555555").grid(
-        row=12, column=1, columnspan=2, sticky="w", pady=(0, 8)
+        row=13, column=1, columnspan=2, sticky="w", pady=(0, 8)
     )
 
     def refresh_queue_list() -> None:
@@ -226,6 +234,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             lower_low_exclude_count=int(lower_low_var.get().removesuffix("回")),
             require_vwap_confirmation=require_vwap_var.get(),
             range_position_min_pct=range_position_min_pct,
+            require_ma5_slope_positive=require_ma5_slope_var.get(),
         )
         config.validate()
         oldest = pd.Timestamp.now().normalize() - pd.Timedelta(days=59)
@@ -262,7 +271,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         win.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=13, column=0, columnspan=3, pady=8)
+    buttons.grid(row=14, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)

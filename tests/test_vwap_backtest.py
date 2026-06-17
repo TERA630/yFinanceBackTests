@@ -109,6 +109,7 @@ class TradeMetricsTest(unittest.TestCase):
         metrics = build_trade_metrics(daily, index[0], 100.0)
         self.assertEqual(metrics["sell_price_1d"], 101.0)
         self.assertEqual(metrics["sell_price_5d"], 105.0)
+        self.assertEqual(metrics["sell_price_10d"], 110.0)
         self.assertEqual(metrics["sell_price_20d"], 120.0)
         self.assertEqual(metrics["minimum_price_5d"], 94.0)
         self.assertEqual(metrics["max_drawdown_5d"], -6.0)
@@ -134,6 +135,8 @@ class SummaryTest(unittest.TestCase):
                 "profit_loss_1d": [10.0, -10.0, None],
                 "return_5d_pct": [2.0, None, None],
                 "profit_loss_5d": [20.0, None, None],
+                "return_10d_pct": [3.0, -2.0, None],
+                "profit_loss_10d": [30.0, -20.0, None],
                 "max_drawdown_5d_pct": [-2.0, -3.0, -4.0],
                 "return_20d_pct": [None, None, None],
                 "profit_loss_20d": [None, None, None],
@@ -143,6 +146,8 @@ class SummaryTest(unittest.TestCase):
         summary = build_summary(trades, config, stock_count=2, evaluated=10, skipped={})
         self.assertEqual(summary["completed_1d"], 2)
         self.assertEqual(summary["win_rate_1d_pct"], 50.0)
+        self.assertEqual(summary["completed_10d"], 2)
+        self.assertEqual(summary["win_rate_10d_pct"], 50.0)
         self.assertEqual(summary["completed_20d"], 0)
         self.assertIsNone(summary["win_rate_20d_pct"])
         self.assertEqual(summary["average_max_drawdown_5d_pct"], -3.0)
@@ -156,6 +161,8 @@ class SummaryTest(unittest.TestCase):
                 "profit_loss_1d": [1.0],
                 "return_5d_pct": [4.5],
                 "profit_loss_5d": [4.5],
+                "return_10d_pct": [6.0],
+                "profit_loss_10d": [6.0],
                 "max_drawdown_5d_pct": [-3.5],
                 "max_favorable_excursion_5d_pct": [6.0],
                 "return_20d_pct": [5.0],
@@ -171,6 +178,7 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("-3%逆行率: 100.00%", markdown)
         self.assertIn("最大順行(MFE)中央値: 6.00%", markdown)
         self.assertIn("+5%到達率: 100.00%", markdown)
+        self.assertIn("| 10営業日後 | 1 | 100.00% | 6.00% | 6.00円 |", markdown)
 
 
 class LowerLowTest(unittest.TestCase):
@@ -284,6 +292,47 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["25日線が下向き"], 1)
+
+    def test_rejects_entry_when_required_ma5_slope_is_not_positive(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        closes = [100.0] * len(dates)
+        closes[4] = 90.0
+        closes[28] = 110.0
+        daily = pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [112.0] * len(dates),
+                "Low": [98.0] * len(dates),
+                "Close": closes,
+                "Volume": [1000.0] * len(dates),
+            },
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -20.0,
+            20.0,
+            "11:00",
+            require_ma5_slope_positive=True,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["5日線が上向きでない"], 1)
 
     def test_rejects_entry_when_price_is_below_vwap(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)

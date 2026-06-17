@@ -45,6 +45,7 @@ def _summary_markdown(summary: dict) -> str:
         f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
         "- 25日線傾き: 横ばい以上（0%以上）",
+        f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
         f"- VWAP維持確認: {'あり' if summary['require_vwap_confirmation'] else 'なし'}",
         f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
         f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
@@ -124,6 +125,8 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- VWAP維持確認: {'あり' if row['vwap_confirmation_required'] else 'なし'}",
             f"- 買値: {_price(row['entry_price'])}",
             f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
+            f"- 当日暫定MA5: {_price(row.get('entry_ma5'))}",
+            f"- 5日線傾き: {_percent(row.get('ma5_slope_pct'))}",
             f"- 当日暫定MA25: {_price(row['entry_ma25'])}",
             f"- 当日25日乖離率: {_percent(row['entry_dev25_pct'])}",
             f"- 25日線傾き: {_percent(row['ma25_slope_pct'])}",

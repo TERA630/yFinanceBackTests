@@ -12,7 +12,7 @@ ENTRY_PREV_CLOSE = "prev_close"
 ENTRY_1100 = "11:00"
 ENTRY_1400 = "14:00"
 ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_1100, ENTRY_1400)
-HORIZONS = (1, 5, 20)
+HORIZONS = (1, 5, 10, 20)
 EXCURSION_WINDOWS = (5, 10, 20)
 
 
@@ -26,6 +26,7 @@ class A8BacktestConfig:
     lower_low_exclude_count: int = 0
     require_vwap_confirmation: bool = True
     range_position_min_pct: Optional[float] = None
+    require_ma5_slope_positive: bool = False
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -42,6 +43,8 @@ class A8BacktestConfig:
             raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
         if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
             raise ValueError("終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
+        if not isinstance(self.require_ma5_slope_positive, bool):
+            raise ValueError("5日線傾き条件は有効または無効で指定してください。")
 
 
 # Compatibility alias for callers using the old name.

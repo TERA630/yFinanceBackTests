@@ -57,6 +57,7 @@ class A8GuiSavedConditionTests(unittest.TestCase):
                     ENTRY_1400,
                     lower_low_exclude_count=2,
                     require_vwap_confirmation=False,
+                    require_ma5_slope_positive=True,
                 ),
             )
         )
@@ -65,6 +66,7 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         self.assertIn("VWAPなし", summary)
         self.assertIn("14:00", summary)
         self.assertIn("安値2回以上除外", summary)
+        self.assertIn("5日線上向き", summary)
         self.assertNotIn("watchlist", summary)
         self.assertNotIn("2026-06", summary)
 
