@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from app.domain.vwap_backtest import build_trade_metrics, calculate_vwap, intraday_entry
+from app.domain.vwap_backtest import (
+    build_trade_metrics,
+    calculate_range_position_pct,
+    calculate_vwap,
+    intraday_entry,
+    intraday_range_position_pct,
+)
 from app.output.markdown_writer import _summary_markdown
 from app.usecases.run_vwap_backtest import _lower_low_count, build_summary, run_vwap_backtest
 from app.domain.vwap_backtest import VwapBacktestConfig
@@ -51,6 +57,42 @@ class VwapCalculationTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             config.validate()
+
+    def test_config_rejects_unsupported_range_position_threshold(self):
+        config = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "11:00",
+            range_position_min_pct=35.0,
+        )
+        with self.assertRaises(ValueError):
+            config.validate()
+
+
+class RangePositionTest(unittest.TestCase):
+    def test_calculates_range_position_from_low_to_high(self):
+        self.assertAlmostEqual(calculate_range_position_pct(90.0, 110.0, 100.0), 50.0)
+
+    def test_zero_range_is_not_calculable(self):
+        self.assertIsNone(calculate_range_position_pct(100.0, 100.0, 100.0))
+
+    def test_intraday_range_position_uses_completed_bars_before_cutoff(self):
+        index = pd.to_datetime(["2026-06-10 10:55", "2026-06-10 11:00"])
+        rows = pd.DataFrame(
+            {
+                "High": [105.0, 120.0],
+                "Low": [95.0, 80.0],
+                "Close": [101.0, 119.0],
+                "Volume": [100.0, 100.0],
+            },
+            index=index,
+        )
+
+        pct = intraday_range_position_pct(rows, pd.Timestamp("2026-06-10"), "11:00", 101.0)
+
+        self.assertAlmostEqual(pct, 60.0)
 
 
 class TradeMetricsTest(unittest.TestCase):
@@ -370,6 +412,70 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["安値切り下げ回数が除外基準以上"], 1)
+
+    def test_rejects_entry_below_selected_range_position_threshold(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 102.0, "Low": 98.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [110.0], "Low": [90.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            range_position_min_pct=60.0,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["終端位置が条件未満"], 1)
+
+    def test_prev_close_range_position_uses_signal_day_daily_range(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 110.0, "Low": 90.0, "Close": 102.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [105.0], "Low": [95.0], "Close": [102.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{signal_date.date()} 15:25"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            3.0,
+            "prev_close",
+            range_position_min_pct=60.0,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertAlmostEqual(trades.iloc[0]["entry_range_position_pct"], 60.0)
+        self.assertEqual(summary["range_position_min_pct"], 60.0)
 
 
 if __name__ == "__main__":

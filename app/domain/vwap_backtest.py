@@ -25,6 +25,7 @@ class A8BacktestConfig:
     entry_time: str
     lower_low_exclude_count: int = 0
     require_vwap_confirmation: bool = True
+    range_position_min_pct: Optional[float] = None
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -39,6 +40,8 @@ class A8BacktestConfig:
             raise ValueError("VWAP維持確認なしでは、エントリー時刻を11:00または14:00にしてください。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):
             raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
+        if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
+            raise ValueError("終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
 
 
 # Compatibility alias for callers using the old name.
@@ -96,6 +99,44 @@ def intraday_entry(
     if pd.isna(price):
         return None
     return float(price), vwap
+
+
+def calculate_range_position_pct(
+    low: Optional[float],
+    high: Optional[float],
+    price: Optional[float],
+) -> Optional[float]:
+    if low is None or high is None or price is None:
+        return None
+    if pd.isna(low) or pd.isna(high) or pd.isna(price):
+        return None
+    low_value = float(low)
+    high_value = float(high)
+    price_value = float(price)
+    range_width = high_value - low_value
+    if range_width <= 0:
+        return None
+    return (price_value - low_value) / range_width * 100.0
+
+
+def intraday_range_position_pct(
+    intraday: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    cutoff: str,
+    price: float,
+) -> Optional[float]:
+    if intraday is None or intraday.empty:
+        return None
+    day = intraday.loc[intraday.index.normalize() == pd.Timestamp(trade_date).normalize()]
+    if day.empty:
+        return None
+    cutoff_time = pd.Timestamp(f"{pd.Timestamp(trade_date).date()} {cutoff}")
+    eligible = day.loc[day.index < cutoff_time]
+    if eligible.empty:
+        return None
+    high = pd.to_numeric(eligible["High"], errors="coerce").max()
+    low = pd.to_numeric(eligible["Low"], errors="coerce").min()
+    return calculate_range_position_pct(_float_or_none(low), _float_or_none(high), price)
 
 
 def build_trade_metrics(daily: pd.DataFrame, entry_date: pd.Timestamp, entry_price: float) -> dict:

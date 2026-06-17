@@ -30,7 +30,7 @@ class A8GuiInput:
     config: A8BacktestConfig
 
 
-def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit: int = 3) -> None:
+def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit: int = 5) -> None:
     queue.append(gui_input)
     del queue[:-limit]
 
@@ -44,15 +44,20 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         if config.lower_low_exclude_count == 0
         else f"安値{config.lower_low_exclude_count}回以上除外"
     )
+    range_label = (
+        "終端位置考慮せず"
+        if config.range_position_min_pct is None
+        else f"終端位置{config.range_position_min_pct:g}%以上"
+    )
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
-        f"{vwap_label} / {entry_label} / {lower_low_label}"
+        f"{vwap_label} / {entry_label} / {lower_low_label} / {range_label}"
     )
 
 
 def default_date_range(now: Optional[pd.Timestamp] = None) -> tuple[pd.Timestamp, pd.Timestamp]:
     today = pd.Timestamp.now().normalize() if now is None else pd.Timestamp(now).normalize()
-    end_date = pd.bdate_range(end=today, periods=1)[0]
+    end_date = pd.offsets.BDay().rollback(today)
     start_date = pd.bdate_range(end=end_date, periods=41)[0]
     return pd.Timestamp(start_date), pd.Timestamp(end_date)
 
@@ -64,7 +69,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A8 バックテスト条件設定")
-    win.geometry("720x650")
+    win.geometry("720x690")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -77,6 +82,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     entry_var = tk.StringVar(value=ENTRY_1100)
     require_vwap_var = tk.BooleanVar(value=True)
     lower_low_var = tk.StringVar(value="0回")
+    range_position_var = tk.StringVar(value="考慮せず")
     default_start, default_end = default_date_range()
 
     ttk.Label(frame, text="開始日").grid(row=0, column=0, sticky="w", pady=6)
@@ -146,20 +152,29 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=14,
     ).grid(row=8, column=1, sticky="w")
 
+    ttk.Label(frame, text="終端位置").grid(row=9, column=0, sticky="w", pady=6)
+    ttk.Combobox(
+        frame,
+        textvariable=range_position_var,
+        values=("考慮せず", "30%以上", "40%以上", "50%以上", "60%以上"),
+        state="readonly",
+        width=14,
+    ).grid(row=9, column=1, sticky="w")
+
     help_var = tk.StringVar()
     help_label = ttk.Label(
         frame,
         textvariable=help_var,
         foreground="#555555",
     )
-    help_label.grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 16))
+    help_label.grid(row=10, column=0, columnspan=3, sticky="w", pady=(10, 16))
 
     def update_vwap_controls() -> None:
         if require_vwap_var.get():
             entry_box.configure(values=("前日終値", ENTRY_1100, ENTRY_1400))
             help_var.set(
                 "指定時刻にVWAP維持を確認し、維持している場合だけエントリーします。\n"
-                "安値切り下げは、指定回数以上の銘柄を除外します（0回は除外なし）。"
+                "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
             )
         else:
             entry_box.configure(values=(ENTRY_1100, ENTRY_1400))
@@ -167,7 +182,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
                 entry_var.set(ENTRY_1100)
             help_var.set(
                 "VWAPとの位置関係を判定せず、11時または14時の価格でエントリーします。\n"
-                "安値切り下げは、指定回数以上の銘柄を除外します（0回は除外なし）。"
+                "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
             )
 
     require_vwap_var.trace_add("write", lambda *_: update_vwap_controls())
@@ -176,11 +191,11 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
-    ttk.Label(frame, text="保存済み条件").grid(row=10, column=0, sticky="nw", pady=(8, 4))
-    queue_list = tk.Listbox(frame, width=78, height=3)
-    queue_list.grid(row=10, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    ttk.Label(frame, text="保存済み条件").grid(row=11, column=0, sticky="nw", pady=(8, 4))
+    queue_list = tk.Listbox(frame, width=78, height=5)
+    queue_list.grid(row=11, column=1, columnspan=2, sticky="w", pady=(8, 4))
     ttk.Label(frame, textvariable=saved_count_var, foreground="#555555").grid(
-        row=11, column=1, columnspan=2, sticky="w", pady=(0, 8)
+        row=12, column=1, columnspan=2, sticky="w", pady=(0, 8)
     )
 
     def refresh_queue_list() -> None:
@@ -198,6 +213,10 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             raise ValueError("出力先フォルダを選択してください。")
         selected = entry_var.get()
         entry_time = ENTRY_PREV_CLOSE if selected == "前日終値" else selected
+        selected_range_position = range_position_var.get()
+        range_position_min_pct = (
+            None if selected_range_position == "考慮せず" else float(selected_range_position.removesuffix("%以上"))
+        )
         config = A8BacktestConfig(
             start_date=start_entry.get_date().strftime("%Y-%m-%d"),
             end_date=end_entry.get_date().strftime("%Y-%m-%d"),
@@ -206,6 +225,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             entry_time=entry_time,
             lower_low_exclude_count=int(lower_low_var.get().removesuffix("回")),
             require_vwap_confirmation=require_vwap_var.get(),
+            range_position_min_pct=range_position_min_pct,
         )
         config.validate()
         oldest = pd.Timestamp.now().normalize() - pd.Timedelta(days=59)
@@ -242,7 +262,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         win.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=12, column=0, columnspan=3, pady=8)
+    buttons.grid(row=13, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)

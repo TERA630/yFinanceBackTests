@@ -22,9 +22,9 @@ class A8GuiDateDefaultsTests(unittest.TestCase):
 
 
 class A8GuiSavedConditionTests(unittest.TestCase):
-    def test_saved_condition_queue_keeps_latest_three(self):
+    def test_saved_condition_queue_keeps_latest_five(self):
         queue = []
-        for index in range(4):
+        for index in range(6):
             append_saved_condition(
                 queue,
                 A8GuiInput(
@@ -40,9 +40,9 @@ class A8GuiSavedConditionTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(len(queue), 3)
+        self.assertEqual(len(queue), 5)
         self.assertEqual(queue[0].stock_file, Path("stock_1.md"))
-        self.assertEqual(queue[-1].stock_file, Path("stock_3.md"))
+        self.assertEqual(queue[-1].stock_file, Path("stock_5.md"))
 
     def test_condition_summary_excludes_paths_and_dates(self):
         summary = summarize_condition(
@@ -84,6 +84,24 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         )
 
         self.assertIn("前日終値", summary)
+
+    def test_condition_summary_includes_range_position_threshold(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_1100,
+                    range_position_min_pct=40.0,
+                ),
+            )
+        )
+
+        self.assertIn("終端位置40%以上", summary)
 
 
 if __name__ == "__main__":

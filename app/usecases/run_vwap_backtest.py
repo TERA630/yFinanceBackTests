@@ -15,7 +15,9 @@ from app.domain.vwap_backtest import (
     HORIZONS,
     A8BacktestConfig,
     build_trade_metrics,
+    calculate_range_position_pct,
     intraday_entry,
+    intraday_range_position_pct,
 )
 from app.usecases.watchlist import load_watchlist
 
@@ -73,6 +75,11 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 _, vwap = entry
                 entry_ma25 = ma25
                 previous_ma25 = _number(daily["MA25"].iloc[daily_position - 1]) if daily_position > 0 else None
+                range_position_pct = calculate_range_position_pct(
+                    _number(row.get("Low")),
+                    _number(row.get("High")),
+                    entry_price,
+                )
             else:
                 next_position = daily_position + 1
                 if next_position >= len(daily):
@@ -89,6 +96,20 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     continue
                 entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
                 previous_ma25 = ma25
+                range_position_pct = intraday_range_position_pct(
+                    intraday,
+                    entry_date,
+                    config.entry_time,
+                    entry_price,
+                )
+
+            if config.range_position_min_pct is not None:
+                if range_position_pct is None:
+                    skipped["終端位置を計算できない"] += 1
+                    continue
+                if range_position_pct < config.range_position_min_pct:
+                    skipped["終端位置が条件未満"] += 1
+                    continue
 
             if entry_ma25 in (None, 0):
                 skipped["当日25日線を計算できない"] += 1
@@ -123,6 +144,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "previous_dev25_pct": dev25_pct,
                 "lower_low_count_3d": lower_low_count,
                 "entry_price": entry_price,
+                "entry_range_position_pct": range_position_pct,
                 "entry_ma25": entry_ma25,
                 "entry_dev25_pct": entry_dev25_pct,
                 "ma25_slope_pct": ma25_slope_pct,
@@ -152,6 +174,7 @@ def build_summary(
         "entry_time": config.entry_time,
         "require_vwap_confirmation": config.require_vwap_confirmation,
         "lower_low_exclude_count": config.lower_low_exclude_count,
+        "range_position_min_pct": config.range_position_min_pct,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),

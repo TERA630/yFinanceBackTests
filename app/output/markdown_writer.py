@@ -49,6 +49,7 @@ def _summary_markdown(summary: dict) -> str:
         f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
         f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
         if summary['lower_low_exclude_count'] > 0 else "- 3日間の安値切り下げ除外: なし",
+        f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
         f"- 評価件数: {summary['evaluated_count']}",
         f"- エントリー件数: {summary['entry_count']}",
@@ -122,6 +123,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- エントリー時刻: {_entry_label(row['entry_time'])}",
             f"- VWAP維持確認: {'あり' if row['vwap_confirmation_required'] else 'なし'}",
             f"- 買値: {_price(row['entry_price'])}",
+            f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
             f"- 当日暫定MA25: {_price(row['entry_ma25'])}",
             f"- 当日25日乖離率: {_percent(row['entry_dev25_pct'])}",
             f"- 25日線傾き: {_percent(row['ma25_slope_pct'])}",
@@ -154,6 +156,10 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
 
 def _entry_label(value: str) -> str:
     return "前日終値" if value == "prev_close" else value
+
+
+def _range_condition(value) -> str:
+    return "考慮せず" if value is None or pd.isna(value) else f"{float(value):g}%以上"
 
 
 def _price(value) -> str:
