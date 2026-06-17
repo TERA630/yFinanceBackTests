@@ -1,3 +1,4 @@
+ 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -203,7 +204,7 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
-# A8 local GUI settings
+# local GUI settings / cache
 .a8_settings.json
 .yfcache/
 
