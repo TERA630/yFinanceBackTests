@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import pickle
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import pandas as pd
 import yfinance as yf
+
+CACHE_DIR = Path(".yfcache")
 
 
 def fetch_daily_prices(watchlist: List[Tuple[str, str]], start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
@@ -15,7 +20,7 @@ def fetch_daily_prices(watchlist: List[Tuple[str, str]], start_date: str, end_da
 
 
 def fetch_intraday_prices(watchlist: List[Tuple[str, str]], start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
-    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=59)
+    cutoff = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
     requested_start = pd.Timestamp(start_date) - pd.Timedelta(days=7)
     start = max(cutoff, requested_start).strftime("%Y-%m-%d")
     end = min(pd.Timestamp.now().normalize() + pd.Timedelta(days=1), pd.Timestamp(end_date) + pd.Timedelta(days=8)).strftime("%Y-%m-%d")
@@ -25,6 +30,11 @@ def fetch_intraday_prices(watchlist: List[Tuple[str, str]], start_date: str, end
 def _download_map(
     watchlist: List[Tuple[str, str]], start: str, end: str, interval: str
 ) -> Dict[str, pd.DataFrame]:
+    cache_path = _cache_path(watchlist, start, end, interval)
+    cached = _read_cache(cache_path)
+    if cached is not None:
+        return cached
+
     symbols = [f"{code}.T" for _, code in watchlist]
     data = yf.download(
         tickers=symbols,
@@ -48,6 +58,7 @@ def _download_map(
                 result[code] = _normalize(data[symbol].copy(), interval)
     elif len(watchlist) == 1:
         result[watchlist[0][1]] = _normalize(data.copy(), interval)
+    _write_cache(cache_path, result)
     return result
 
 
@@ -58,3 +69,31 @@ def _normalize(df: pd.DataFrame, interval: str) -> pd.DataFrame:
         index = index.tz_convert("Asia/Tokyo").tz_localize(None)
     df.index = index.normalize() if interval == "1d" else index
     return df.sort_index().dropna(how="all")
+
+
+def _cache_path(watchlist: List[Tuple[str, str]], start: str, end: str, interval: str) -> Path:
+    codes = ",".join(sorted(code for _, code in watchlist))
+    digest = hashlib.sha1(codes.encode("utf-8")).hexdigest()[:8]
+    start_label = pd.Timestamp(start).strftime("%Y%m%d")
+    end_label = pd.Timestamp(end).strftime("%Y%m%d")
+    return CACHE_DIR / f"{interval}_{start_label}_{end_label}_{digest}.pkl"
+
+
+def _read_cache(path: Path) -> Dict[str, pd.DataFrame] | None:
+    try:
+        if not path.exists():
+            return None
+        with path.open("rb") as file:
+            value = pickle.load(file)
+    except (OSError, pickle.PickleError, EOFError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _write_cache(path: Path, value: Dict[str, pd.DataFrame]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as file:
+            pickle.dump(value, file)
+    except OSError:
+        return

@@ -65,6 +65,10 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
             if config.lower_low_exclude_count > 0 and lower_low_count >= config.lower_low_exclude_count:
                 skipped["安値切り下げ回数が除外基準以上"] += 1
                 continue
+            higher_high_count = _higher_high_count(daily, daily_position)
+            if config.higher_high_exclude_count > 0 and higher_high_count < config.higher_high_exclude_count:
+                skipped["高値更新回数が必要回数未満"] += 1
+                continue
 
             if config.entry_time == ENTRY_PREV_CLOSE:
                 entry_date = signal_date
@@ -159,6 +163,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "previous_ma25": ma25,
                 "previous_dev25_pct": dev25_pct,
                 "lower_low_count_3d": lower_low_count,
+                "higher_high_count_3d": higher_high_count,
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
                 "entry_ma5": entry_ma5,
@@ -192,6 +197,7 @@ def build_summary(
         "entry_time": config.entry_time,
         "require_vwap_confirmation": config.require_vwap_confirmation,
         "lower_low_exclude_count": config.lower_low_exclude_count,
+        "higher_high_exclude_count": config.higher_high_exclude_count,
         "range_position_min_pct": config.range_position_min_pct,
         "require_ma5_slope_positive": config.require_ma5_slope_positive,
         "stock_count": stock_count,
@@ -274,8 +280,19 @@ def _lower_low_count(daily: pd.DataFrame, signal_position: int) -> int:
     return int((lows.diff() < 0).iloc[-3:].fillna(False).sum())
 
 
-def _validate_intraday_range(config: VwapBacktestConfig) -> None:
-    oldest = pd.Timestamp.now().normalize() - pd.Timedelta(days=59)
+def _higher_high_count(daily: pd.DataFrame, signal_position: int) -> int:
+    start = max(0, signal_position - 3)
+    highs = pd.to_numeric(daily["High"].iloc[start:signal_position + 1], errors="coerce")
+    return int((highs.diff() > 0).iloc[-3:].fillna(False).sum())
+
+
+def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:
+    today = pd.Timestamp.now().normalize() if now is None else pd.Timestamp(now).normalize()
+    return pd.Timestamp(pd.offsets.BDay().rollforward(today - pd.Timedelta(days=59)))
+
+
+def _validate_intraday_range(config: A8BacktestConfig) -> None:
+    oldest = _oldest_intraday_start()
     if pd.Timestamp(config.start_date) < oldest:
         raise ValueError(
             f"5分足を使うため、開始日は {oldest.strftime('%Y-%m-%d')} 以降にしてください。"

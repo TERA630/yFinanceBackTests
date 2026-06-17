@@ -112,6 +112,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 前日MA25: {_price(row['previous_ma25'])}",
             f"- 前日25日乖離率: {_percent(row['previous_dev25_pct'])}",
             f"- 直近3日の安値切り下げ回数: {int(row['lower_low_count_3d'])}回",
+            f"- 直近3日の高値更新回数: {int(row.get('higher_high_count_3d', 0))}回",
             f"- エントリー時刻: {_entry_label(row['entry_time'])}",
             f"- VWAP維持確認: {'あり' if row['vwap_confirmation_required'] else 'なし'}",
             f"- 買値: {_price(row['entry_price'])}",
@@ -159,6 +160,8 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
         f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
         if summary['lower_low_exclude_count'] > 0 else "- 3日間の安値切り下げ除外: なし",
+        f"- 3日間の高値更新条件: {summary.get('higher_high_exclude_count', 0)}回以上"
+        if summary.get('higher_high_exclude_count', 0) > 0 else "- 3日間の高値更新条件: 考慮しない",
         f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
         f"- 評価件数: {summary['evaluated_count']}",

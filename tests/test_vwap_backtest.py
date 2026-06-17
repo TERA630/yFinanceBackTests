@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from app.data import vwap_price_repository
 from app.domain.vwap_backtest import (
     build_trade_metrics,
     calculate_range_position_pct,
@@ -16,7 +17,7 @@ from app.domain.vwap_backtest import (
     intraday_range_position_pct,
 )
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
-from app.usecases.run_vwap_backtest import _lower_low_count, build_summary, run_vwap_backtest
+from app.usecases.run_vwap_backtest import _higher_high_count, _lower_low_count, build_summary, run_vwap_backtest
 from app.domain.vwap_backtest import VwapBacktestConfig
 
 
@@ -298,6 +299,7 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("## 実行条件", markdown)
         self.assertIn("- 前日・当日25日乖離率: -1.0% < 乖離率 <= 2.0%", markdown)
         self.assertIn("- エントリーのみ: 1件", markdown)
+        self.assertIn("- 3日間の高値更新条件: 考慮しない", markdown)
         self.assertIn("表示銘柄", markdown)
         self.assertNotIn("非表示銘柄", markdown)
 
@@ -306,6 +308,32 @@ class LowerLowTest(unittest.TestCase):
     def test_counts_lower_lows_over_the_latest_three_comparisons(self):
         daily = pd.DataFrame({"Low": [100.0, 99.0, 101.0, 98.0]})
         self.assertEqual(_lower_low_count(daily, 3), 2)
+
+
+class HigherHighTest(unittest.TestCase):
+    def test_counts_higher_highs_over_the_latest_three_comparisons(self):
+        daily = pd.DataFrame({"High": [100.0, 101.0, 99.0, 102.0]})
+        self.assertEqual(_higher_high_count(daily, 3), 2)
+
+
+class YfinanceCacheTest(unittest.TestCase):
+    def test_reuses_cached_download_for_same_symbols_dates_and_interval(self):
+        index = pd.to_datetime(["2026-06-01"])
+        downloaded = pd.DataFrame(
+            {"Open": [100.0], "High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [1000.0]},
+            index=index,
+        )
+
+        with TemporaryDirectory() as tmp:
+            with patch.object(vwap_price_repository, "CACHE_DIR", Path(tmp) / ".yfcache"), patch(
+                "app.data.vwap_price_repository.yf.download", return_value=downloaded
+            ) as download:
+                first = vwap_price_repository._download_map([("テスト", "1234")], "2026-06-01", "2026-06-02", "1d")
+                second = vwap_price_repository._download_map([("テスト", "1234")], "2026-06-01", "2026-06-02", "1d")
+
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(first["1234"].iloc[0]["Close"], 100.0)
+        self.assertEqual(second["1234"].iloc[0]["Close"], 100.0)
 
 
 class BacktestUsecaseTest(unittest.TestCase):
@@ -481,6 +509,75 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["VWAP未維持"], 1)
+
+    def test_rejects_entry_when_higher_high_count_is_below_required_count(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        highs = [102.0] * len(dates)
+        highs[25:29] = [100.0, 101.0, 100.0, 100.0]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": highs, "Low": 98.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            higher_high_exclude_count=2,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["高値更新回数が必要回数未満"], 1)
+
+    def test_accepts_entry_when_higher_high_count_meets_required_count(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        highs = [102.0] * len(dates)
+        highs[25:29] = [100.0, 101.0, 100.0, 101.0]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": highs, "Low": 98.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            higher_high_exclude_count=2,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["higher_high_count_3d"], 2)
+        self.assertEqual(summary["higher_high_exclude_count"], 2)
 
     def test_enters_at_selected_time_without_vwap_confirmation(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)

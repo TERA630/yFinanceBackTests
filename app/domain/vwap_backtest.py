@@ -24,6 +24,7 @@ class A8BacktestConfig:
     dev25_max: float
     entry_time: str
     lower_low_exclude_count: int = 0
+    higher_high_exclude_count: int = 0
     require_vwap_confirmation: bool = True
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
@@ -41,6 +42,8 @@ class A8BacktestConfig:
             raise ValueError("VWAP維持確認なしでは、エントリー時刻を11:00または14:00にしてください。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):
             raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
+        if self.higher_high_exclude_count not in (0, 1, 2, 3):
+            raise ValueError("高値更新条件は0～3で指定してください。")
         if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
             raise ValueError("終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
         if not isinstance(self.require_ma5_slope_positive, bool):

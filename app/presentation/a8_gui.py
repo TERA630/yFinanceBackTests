@@ -44,6 +44,11 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         if config.lower_low_exclude_count == 0
         else f"安値{config.lower_low_exclude_count}回以上除外"
     )
+    higher_high_label = (
+        "高値更新考慮なし"
+        if config.higher_high_exclude_count == 0
+        else f"高値更新{config.higher_high_exclude_count}回以上"
+    )
     range_label = (
         "終端位置考慮せず"
         if config.range_position_min_pct is None
@@ -52,14 +57,14 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
     ma5_label = "5日線上向き" if config.require_ma5_slope_positive else "5日線条件なし"
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
-        f"{vwap_label} / {entry_label} / {lower_low_label} / {range_label} / {ma5_label}"
+        f"{vwap_label} / {entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / {ma5_label}"
     )
 
 
 def default_date_range(now: Optional[pd.Timestamp] = None) -> tuple[pd.Timestamp, pd.Timestamp]:
     today = pd.Timestamp.now().normalize() if now is None else pd.Timestamp(now).normalize()
     end_date = pd.offsets.BDay().rollback(today)
-    start_date = pd.bdate_range(end=end_date, periods=41)[0]
+    start_date = pd.offsets.BDay().rollforward(today - pd.Timedelta(days=59))
     return pd.Timestamp(start_date), pd.Timestamp(end_date)
 
 
@@ -70,7 +75,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A9r2 バックテスト条件設定")
-    win.geometry("720x730")
+    win.geometry("720x760")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -83,6 +88,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     entry_var = tk.StringVar(value=ENTRY_1100)
     require_vwap_var = tk.BooleanVar(value=True)
     lower_low_var = tk.StringVar(value="0回")
+    higher_high_var = tk.StringVar(value="考慮しない")
     range_position_var = tk.StringVar(value="考慮せず")
     require_ma5_slope_var = tk.BooleanVar(value=False)
     default_start, default_end = default_date_range()
@@ -163,11 +169,20 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=14,
     ).grid(row=9, column=1, sticky="w")
 
+    ttk.Label(frame, text="3日間の高値更新条件").grid(row=10, column=0, sticky="w", pady=6)
+    ttk.Combobox(
+        frame,
+        textvariable=higher_high_var,
+        values=("考慮しない", "1回以上", "2回以上", "3回"),
+        state="readonly",
+        width=14,
+    ).grid(row=10, column=1, sticky="w")
+
     ttk.Checkbutton(
         frame,
         text="5日線傾き > 0 を条件にする",
         variable=require_ma5_slope_var,
-    ).grid(row=10, column=0, columnspan=2, sticky="w", pady=6)
+    ).grid(row=11, column=0, columnspan=2, sticky="w", pady=6)
 
     help_var = tk.StringVar()
     help_label = ttk.Label(
@@ -175,7 +190,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         textvariable=help_var,
         foreground="#555555",
     )
-    help_label.grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 16))
+    help_label.grid(row=12, column=0, columnspan=3, sticky="w", pady=(10, 16))
 
     def update_vwap_controls() -> None:
         if require_vwap_var.get():
@@ -199,11 +214,11 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
-    ttk.Label(frame, text="保存済み条件").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+    ttk.Label(frame, text="保存済み条件").grid(row=13, column=0, sticky="nw", pady=(8, 4))
     queue_list = tk.Listbox(frame, width=78, height=5)
-    queue_list.grid(row=12, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    queue_list.grid(row=13, column=1, columnspan=2, sticky="w", pady=(8, 4))
     ttk.Label(frame, textvariable=saved_count_var, foreground="#555555").grid(
-        row=13, column=1, columnspan=2, sticky="w", pady=(0, 8)
+        row=14, column=1, columnspan=2, sticky="w", pady=(0, 8)
     )
 
     def refresh_queue_list() -> None:
@@ -225,6 +240,9 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         range_position_min_pct = (
             None if selected_range_position == "考慮せず" else float(selected_range_position.removesuffix("%以上"))
         )
+        higher_high_exclude_count = (
+            0 if higher_high_var.get() == "考慮しない" else int(higher_high_var.get().removesuffix("以上").removesuffix("回"))
+        )
         config = A8BacktestConfig(
             start_date=start_entry.get_date().strftime("%Y-%m-%d"),
             end_date=end_entry.get_date().strftime("%Y-%m-%d"),
@@ -232,12 +250,13 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             dev25_max=float(max_var.get()),
             entry_time=entry_time,
             lower_low_exclude_count=int(lower_low_var.get().removesuffix("回")),
+            higher_high_exclude_count=higher_high_exclude_count,
             require_vwap_confirmation=require_vwap_var.get(),
             range_position_min_pct=range_position_min_pct,
             require_ma5_slope_positive=require_ma5_slope_var.get(),
         )
         config.validate()
-        oldest = pd.Timestamp.now().normalize() - pd.Timedelta(days=59)
+        oldest = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
         if pd.Timestamp(config.start_date) < oldest:
             raise ValueError(f"開始日は {oldest.strftime('%Y-%m-%d')} 以降にしてください。")
         if pd.Timestamp(config.end_date) > pd.Timestamp.now().normalize():
@@ -271,7 +290,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         win.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=14, column=0, columnspan=3, pady=8)
+    buttons.grid(row=15, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)

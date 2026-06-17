@@ -8,17 +8,23 @@ from app.presentation.a8_gui import A8GuiInput, append_saved_condition, default_
 
 
 class A8GuiDateDefaultsTests(unittest.TestCase):
-    def test_weekday_uses_today_and_forty_business_days_before(self):
+    def test_weekday_uses_earliest_business_day_within_sixty_calendar_days(self):
         start, end = default_date_range(pd.Timestamp("2026-06-15"))
 
         self.assertEqual(end, pd.Timestamp("2026-06-15"))
-        self.assertEqual(len(pd.bdate_range(start, end)), 41)
+        self.assertEqual(start, pd.Timestamp("2026-04-17"))
 
     def test_weekend_uses_previous_friday(self):
         start, end = default_date_range(pd.Timestamp("2026-06-14"))
 
         self.assertEqual(end, pd.Timestamp("2026-06-12"))
-        self.assertEqual(len(pd.bdate_range(start, end)), 41)
+        self.assertEqual(start, pd.Timestamp("2026-04-16"))
+
+    def test_rolls_start_forward_when_sixty_day_limit_is_weekend(self):
+        start, end = default_date_range(pd.Timestamp("2026-06-17"))
+
+        self.assertEqual(end, pd.Timestamp("2026-06-17"))
+        self.assertEqual(start, pd.Timestamp("2026-04-20"))
 
 
 class A8GuiSavedConditionTests(unittest.TestCase):
@@ -66,6 +72,7 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         self.assertIn("VWAPなし", summary)
         self.assertIn("14:00", summary)
         self.assertIn("安値2回以上除外", summary)
+        self.assertIn("高値更新考慮なし", summary)
         self.assertIn("5日線上向き", summary)
         self.assertNotIn("watchlist", summary)
         self.assertNotIn("2026-06", summary)
@@ -104,6 +111,24 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         )
 
         self.assertIn("終端位置40%以上", summary)
+
+    def test_condition_summary_includes_higher_high_exclusion(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_1100,
+                    higher_high_exclude_count=2,
+                ),
+            )
+        )
+
+        self.assertIn("高値更新2回以上", summary)
 
 
 if __name__ == "__main__":

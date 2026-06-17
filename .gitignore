@@ -205,6 +205,7 @@ tempCodeRunnerFile.py
 
 # A8 local GUI settings
 .a8_settings.json
+.yfcache/
 
 # Ruff stuff:
 .ruff_cache/
