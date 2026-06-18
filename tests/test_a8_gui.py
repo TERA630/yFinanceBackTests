@@ -3,7 +3,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.domain.vwap_backtest import A8BacktestConfig, ENTRY_1100, ENTRY_1400, ENTRY_PREV_CLOSE
+from app.domain.vwap_backtest import (
+    A8BacktestConfig,
+    ENTRY_1100,
+    ENTRY_1400,
+    ENTRY_PREV_CLOSE,
+    MA5_SLOWDOWN_ALLOW_ONE,
+)
 from app.presentation.a8_gui import A8GuiInput, append_saved_condition, default_date_range, summarize_condition
 
 
@@ -129,6 +135,24 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         )
 
         self.assertIn("高値更新2回以上", summary)
+
+    def test_condition_summary_includes_ma5_slope_slowdown_policy(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_1100,
+                    ma5_slope_slowdown_policy=MA5_SLOWDOWN_ALLOW_ONE,
+                ),
+            )
+        )
+
+        self.assertIn("5日線鈍化:前日・3日前のいずれかのみ許容", summary)
 
 
 if __name__ == "__main__":

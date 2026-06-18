@@ -19,8 +19,28 @@ except Exception:
     ttk = None
     DateEntry = None
 
-from app.domain.vwap_backtest import A8BacktestConfig, ENTRY_1100, ENTRY_1400, ENTRY_PREV_CLOSE
+from app.domain.vwap_backtest import (
+    A8BacktestConfig,
+    ENTRY_1100,
+    ENTRY_1400,
+    ENTRY_PREV_CLOSE,
+    MA5_SLOWDOWN_ALLOW_ONE,
+    MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
+    MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
+    MA5_SLOWDOWN_IGNORE,
+    MA5_SLOWDOWN_REJECT_ANY,
+)
 from app.presentation.a8_settings import load_watchlist_path, save_watchlist_path
+
+
+MA5_SLOWDOWN_LABELS = {
+    MA5_SLOWDOWN_IGNORE: "考慮しない",
+    MA5_SLOWDOWN_REJECT_ANY: "前日・3日前とも許容しない",
+    MA5_SLOWDOWN_ALLOW_ONE: "前日・3日前のいずれかのみ許容",
+    MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO: "3日前のみ許容",
+    MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY: "前日のみ許容",
+}
+MA5_SLOWDOWN_VALUES = {label: value for value, label in MA5_SLOWDOWN_LABELS.items()}
 
 
 @dataclass(frozen=True)
@@ -55,9 +75,11 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         else f"終端位置{config.range_position_min_pct:g}%以上"
     )
     ma5_label = "5日線上向き" if config.require_ma5_slope_positive else "5日線条件なし"
+    ma5_slowdown_label = MA5_SLOWDOWN_LABELS.get(config.ma5_slope_slowdown_policy, "考慮しない")
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
-        f"{vwap_label} / {entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / {ma5_label}"
+        f"{vwap_label} / {entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
+        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label}"
     )
 
 
@@ -75,7 +97,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A9r2 バックテスト条件設定")
-    win.geometry("720x760")
+    win.geometry("720x800")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -91,6 +113,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     higher_high_var = tk.StringVar(value="考慮しない")
     range_position_var = tk.StringVar(value="考慮せず")
     require_ma5_slope_var = tk.BooleanVar(value=False)
+    ma5_slowdown_var = tk.StringVar(value=MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
     default_start, default_end = default_date_range()
 
     ttk.Label(frame, text="開始日").grid(row=0, column=0, sticky="w", pady=6)
@@ -184,13 +207,22 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         variable=require_ma5_slope_var,
     ).grid(row=11, column=0, columnspan=2, sticky="w", pady=6)
 
+    ttk.Label(frame, text="5日線傾き鈍化").grid(row=12, column=0, sticky="w", pady=6)
+    ttk.Combobox(
+        frame,
+        textvariable=ma5_slowdown_var,
+        values=tuple(MA5_SLOWDOWN_VALUES.keys()),
+        state="readonly",
+        width=30,
+    ).grid(row=12, column=1, sticky="w")
+
     help_var = tk.StringVar()
     help_label = ttk.Label(
         frame,
         textvariable=help_var,
         foreground="#555555",
     )
-    help_label.grid(row=12, column=0, columnspan=3, sticky="w", pady=(10, 16))
+    help_label.grid(row=13, column=0, columnspan=3, sticky="w", pady=(10, 16))
 
     def update_vwap_controls() -> None:
         if require_vwap_var.get():
@@ -214,11 +246,16 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
-    ttk.Label(frame, text="保存済み条件").grid(row=13, column=0, sticky="nw", pady=(8, 4))
-    queue_list = tk.Listbox(frame, width=78, height=5)
-    queue_list.grid(row=13, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    ttk.Label(frame, text="保存済み条件").grid(row=14, column=0, sticky="nw", pady=(8, 4))
+    queue_frame = ttk.Frame(frame)
+    queue_frame.grid(row=14, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    queue_list = tk.Listbox(queue_frame, width=78, height=5)
+    queue_xscroll = ttk.Scrollbar(queue_frame, orient=tk.HORIZONTAL, command=queue_list.xview)
+    queue_list.configure(xscrollcommand=queue_xscroll.set)
+    queue_list.grid(row=0, column=0, sticky="w")
+    queue_xscroll.grid(row=1, column=0, sticky="ew")
     ttk.Label(frame, textvariable=saved_count_var, foreground="#555555").grid(
-        row=14, column=1, columnspan=2, sticky="w", pady=(0, 8)
+        row=15, column=1, columnspan=2, sticky="w", pady=(0, 8)
     )
 
     def refresh_queue_list() -> None:
@@ -254,6 +291,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             require_vwap_confirmation=require_vwap_var.get(),
             range_position_min_pct=range_position_min_pct,
             require_ma5_slope_positive=require_ma5_slope_var.get(),
+            ma5_slope_slowdown_policy=MA5_SLOWDOWN_VALUES[ma5_slowdown_var.get()],
         )
         config.validate()
         oldest = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
@@ -290,7 +328,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         win.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=15, column=0, columnspan=3, pady=8)
+    buttons.grid(row=16, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)

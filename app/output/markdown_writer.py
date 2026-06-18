@@ -7,7 +7,24 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.domain.vwap_backtest import EXCURSION_WINDOWS, HORIZONS
+from app.domain.vwap_backtest import (
+    EXCURSION_WINDOWS,
+    HORIZONS,
+    MA5_SLOWDOWN_ALLOW_ONE,
+    MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
+    MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
+    MA5_SLOWDOWN_IGNORE,
+    MA5_SLOWDOWN_REJECT_ANY,
+)
+
+
+MA5_SLOWDOWN_LABELS = {
+    MA5_SLOWDOWN_IGNORE: "考慮しない",
+    MA5_SLOWDOWN_REJECT_ANY: "前日・3日前とも許容しない",
+    MA5_SLOWDOWN_ALLOW_ONE: "前日・3日前のいずれかのみ許容",
+    MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO: "3日前のみ許容",
+    MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY: "前日のみ許容",
+}
 
 
 def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
@@ -119,6 +136,8 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
             f"- 当日暫定MA5: {_price(row.get('entry_ma5'))}",
             f"- 5日線傾き: {_percent(row.get('ma5_slope_pct'))}",
+            f"- 前日5日線傾き: {_percent(row.get('previous_ma5_slope_pct'))}",
+            f"- 3営業日前5日線傾き: {_percent(row.get('three_days_ago_ma5_slope_pct'))}",
             f"- 当日暫定MA25: {_price(row['entry_ma25'])}",
             f"- 当日25日乖離率: {_percent(row['entry_dev25_pct'])}",
             f"- 25日線傾き: {_percent(row['ma25_slope_pct'])}",
@@ -156,6 +175,7 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
         "- 25日線傾き: 横ばい以上（0%以上）",
         f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
+        f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
         f"- VWAP維持確認: {'あり' if summary['require_vwap_confirmation'] else 'なし'}",
         f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
         f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
@@ -193,6 +213,10 @@ def _entry_label(value: str) -> str:
 
 def _range_condition(value) -> str:
     return "考慮せず" if value is None or pd.isna(value) else f"{float(value):g}%以上"
+
+
+def _ma5_slowdown_label(value) -> str:
+    return MA5_SLOWDOWN_LABELS.get(value, MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
 
 
 def _first_touch(value) -> str:

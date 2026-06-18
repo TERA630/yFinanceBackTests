@@ -9,12 +9,17 @@ import pandas as pd
 
 from app.data import vwap_price_repository
 from app.domain.vwap_backtest import (
+    MA5_SLOWDOWN_ALLOW_ONE,
+    MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
+    MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
+    MA5_SLOWDOWN_REJECT_ANY,
     build_trade_metrics,
     calculate_range_position_pct,
     calculate_vwap,
     first_threshold_touch,
     intraday_entry,
     intraday_range_position_pct,
+    is_ma5_slope_slowdown_excluded,
 )
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
 from app.usecases.run_vwap_backtest import _higher_high_count, _lower_low_count, build_summary, run_vwap_backtest
@@ -95,6 +100,27 @@ class RangePositionTest(unittest.TestCase):
         pct = intraday_range_position_pct(rows, pd.Timestamp("2026-06-10"), "11:00", 101.0)
 
         self.assertAlmostEqual(pct, 60.0)
+
+
+class Ma5SlopeSlowdownTest(unittest.TestCase):
+    def test_reject_any_excludes_previous_or_three_days_ago_slowdown(self):
+        self.assertTrue(is_ma5_slope_slowdown_excluded(1.0, 2.0, 0.5, MA5_SLOWDOWN_REJECT_ANY))
+        self.assertTrue(is_ma5_slope_slowdown_excluded(1.0, 0.5, 2.0, MA5_SLOWDOWN_REJECT_ANY))
+        self.assertFalse(is_ma5_slope_slowdown_excluded(1.0, 0.5, 0.5, MA5_SLOWDOWN_REJECT_ANY))
+
+    def test_allow_one_excludes_only_when_both_slowdowns_exist(self):
+        self.assertFalse(is_ma5_slope_slowdown_excluded(1.0, 2.0, 0.5, MA5_SLOWDOWN_ALLOW_ONE))
+        self.assertFalse(is_ma5_slope_slowdown_excluded(1.0, 0.5, 2.0, MA5_SLOWDOWN_ALLOW_ONE))
+        self.assertTrue(is_ma5_slope_slowdown_excluded(1.0, 2.0, 2.0, MA5_SLOWDOWN_ALLOW_ONE))
+
+    def test_direction_specific_allowance(self):
+        self.assertFalse(is_ma5_slope_slowdown_excluded(1.0, 0.5, 2.0, MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO))
+        self.assertTrue(is_ma5_slope_slowdown_excluded(1.0, 2.0, 0.5, MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO))
+        self.assertFalse(is_ma5_slope_slowdown_excluded(1.0, 2.0, 0.5, MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY))
+        self.assertTrue(is_ma5_slope_slowdown_excluded(1.0, 0.5, 2.0, MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY))
+
+    def test_enabled_policy_excludes_when_slope_history_is_missing(self):
+        self.assertTrue(is_ma5_slope_slowdown_excluded(None, 1.0, 1.0, MA5_SLOWDOWN_REJECT_ANY))
 
 
 class TradeMetricsTest(unittest.TestCase):
@@ -482,6 +508,47 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["5日線が上向きでない"], 1)
+
+    def test_rejects_entry_when_ma5_slope_slowdown_policy_excludes_both(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        closes = [100.0] * len(dates)
+        closes[21:29] = [100.0, 101.0, 102.0, 104.0, 107.0, 111.0, 116.0, 122.0]
+        daily = pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [130.0] * len(dates),
+                "Low": [95.0] * len(dates),
+                "Close": closes,
+                "Volume": [1000.0] * len(dates),
+            },
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [110.0], "Low": [110.0], "Close": [110.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -20.0,
+            20.0,
+            "11:00",
+            ma5_slope_slowdown_policy=MA5_SLOWDOWN_ALLOW_ONE,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["5日線傾き鈍化"], 1)
+        self.assertEqual(summary["ma5_slope_slowdown_policy"], MA5_SLOWDOWN_ALLOW_ONE)
 
     def test_rejects_entry_when_price_is_below_vwap(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)

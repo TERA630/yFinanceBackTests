@@ -14,6 +14,18 @@ ENTRY_1400 = "14:00"
 ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_1100, ENTRY_1400)
 HORIZONS = (1, 5, 10, 15)
 EXCURSION_WINDOWS = (5, 10, 15)
+MA5_SLOWDOWN_IGNORE = "ignore"
+MA5_SLOWDOWN_REJECT_ANY = "reject_any"
+MA5_SLOWDOWN_ALLOW_ONE = "allow_one"
+MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO = "allow_three_days_ago"
+MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY = "allow_previous_day"
+MA5_SLOWDOWN_POLICIES = (
+    MA5_SLOWDOWN_IGNORE,
+    MA5_SLOWDOWN_REJECT_ANY,
+    MA5_SLOWDOWN_ALLOW_ONE,
+    MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
+    MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +40,7 @@ class A8BacktestConfig:
     require_vwap_confirmation: bool = True
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
+    ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -48,6 +61,8 @@ class A8BacktestConfig:
             raise ValueError("終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
         if not isinstance(self.require_ma5_slope_positive, bool):
             raise ValueError("5日線傾き条件は有効または無効で指定してください。")
+        if self.ma5_slope_slowdown_policy not in MA5_SLOWDOWN_POLICIES:
+            raise ValueError("5日線傾き鈍化条件は対応する選択肢から指定してください。")
 
 
 # Compatibility alias for callers using the old name.
@@ -123,6 +138,30 @@ def calculate_range_position_pct(
     if range_width <= 0:
         return None
     return (price_value - low_value) / range_width * 100.0
+
+
+def is_ma5_slope_slowdown_excluded(
+    current_slope_pct: Optional[float],
+    previous_slope_pct: Optional[float],
+    three_days_ago_slope_pct: Optional[float],
+    policy: str,
+) -> bool:
+    if policy == MA5_SLOWDOWN_IGNORE:
+        return False
+    if current_slope_pct is None or previous_slope_pct is None or three_days_ago_slope_pct is None:
+        return True
+
+    slower_than_previous = current_slope_pct < previous_slope_pct
+    slower_than_three_days_ago = current_slope_pct < three_days_ago_slope_pct
+    if policy == MA5_SLOWDOWN_REJECT_ANY:
+        return slower_than_previous or slower_than_three_days_ago
+    if policy == MA5_SLOWDOWN_ALLOW_ONE:
+        return slower_than_previous and slower_than_three_days_ago
+    if policy == MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO:
+        return slower_than_previous
+    if policy == MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY:
+        return slower_than_three_days_ago
+    raise ValueError(f"未対応の5日線傾き鈍化条件です: {policy}")
 
 
 def intraday_range_position_pct(

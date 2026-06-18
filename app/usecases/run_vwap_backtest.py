@@ -18,6 +18,7 @@ from app.domain.vwap_backtest import (
     calculate_range_position_pct,
     intraday_entry,
     intraday_range_position_pct,
+    is_ma5_slope_slowdown_excluded,
 )
 from app.usecases.watchlist import load_watchlist
 
@@ -82,6 +83,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 previous_ma25 = _number(daily["MA25"].iloc[daily_position - 1]) if daily_position > 0 else None
                 entry_ma5 = ma5
                 previous_ma5 = _number(daily["MA5"].iloc[daily_position - 1]) if daily_position > 0 else None
+                entry_position = daily_position
                 range_position_pct = calculate_range_position_pct(
                     _number(row.get("Low")),
                     _number(row.get("High")),
@@ -105,6 +107,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 previous_ma25 = ma25
                 entry_ma5 = _provisional_ma(daily, daily_position, entry_price, 5)
                 previous_ma5 = ma5
+                entry_position = next_position
                 range_position_pct = intraday_range_position_pct(
                     intraday,
                     entry_date,
@@ -147,6 +150,16 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 if ma5_slope_pct <= 0.0:
                     skipped["5日線が上向きでない"] += 1
                     continue
+            previous_ma5_slope_pct = _ma_slope_pct_at(daily, entry_position - 1, 5)
+            three_days_ago_ma5_slope_pct = _ma_slope_pct_at(daily, entry_position - 3, 5)
+            if is_ma5_slope_slowdown_excluded(
+                ma5_slope_pct,
+                previous_ma5_slope_pct,
+                three_days_ago_ma5_slope_pct,
+                config.ma5_slope_slowdown_policy,
+            ):
+                skipped["5日線傾き鈍化"] += 1
+                continue
 
             if config.require_vwap_confirmation and entry_price < vwap:
                 skipped["VWAP未維持"] += 1
@@ -168,6 +181,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "entry_range_position_pct": range_position_pct,
                 "entry_ma5": entry_ma5,
                 "ma5_slope_pct": ma5_slope_pct,
+                "previous_ma5_slope_pct": previous_ma5_slope_pct,
+                "three_days_ago_ma5_slope_pct": three_days_ago_ma5_slope_pct,
                 "entry_ma25": entry_ma25,
                 "entry_dev25_pct": entry_dev25_pct,
                 "ma25_slope_pct": ma25_slope_pct,
@@ -200,6 +215,7 @@ def build_summary(
         "higher_high_exclude_count": config.higher_high_exclude_count,
         "range_position_min_pct": config.range_position_min_pct,
         "require_ma5_slope_positive": config.require_ma5_slope_positive,
+        "ma5_slope_slowdown_policy": config.ma5_slope_slowdown_policy,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -284,6 +300,19 @@ def _higher_high_count(daily: pd.DataFrame, signal_position: int) -> int:
     start = max(0, signal_position - 3)
     highs = pd.to_numeric(daily["High"].iloc[start:signal_position + 1], errors="coerce")
     return int((highs.diff() > 0).iloc[-3:].fillna(False).sum())
+
+
+def _ma_slope_pct_at(daily: pd.DataFrame, position: int, window: int):
+    if position <= 0 or position >= len(daily):
+        return None
+    column = f"MA{window}"
+    if column not in daily.columns:
+        return None
+    current = _number(daily[column].iloc[position])
+    previous = _number(daily[column].iloc[position - 1])
+    if current in (None, 0) or previous in (None, 0):
+        return None
+    return (current / previous - 1.0) * 100.0
 
 
 def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:
