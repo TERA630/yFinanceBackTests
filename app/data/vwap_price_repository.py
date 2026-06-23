@@ -14,7 +14,8 @@ CACHE_DIR = Path(".yfcache")
 
 
 def fetch_daily_prices(watchlist: List[Tuple[str, str]], start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
-    start = (pd.Timestamp(start_date) - pd.Timedelta(days=70)).strftime("%Y-%m-%d")
+    # 75日線・60日高安値を始値時点の値として計算できるよう、十分な営業日前データを取得する。
+    start = (pd.Timestamp(start_date) - pd.Timedelta(days=130)).strftime("%Y-%m-%d")
     end = (pd.Timestamp(end_date) + pd.Timedelta(days=45)).strftime("%Y-%m-%d")
     return _download_map(watchlist, start, end, "1d")
 

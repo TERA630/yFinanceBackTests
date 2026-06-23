@@ -26,6 +26,14 @@ MA5_SLOWDOWN_POLICIES = (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
 )
+RESISTANCE_FAILURE_IGNORE = "ignore"
+RESISTANCE_FAILURE_REJECT_APPROACH = "reject_approach"
+RESISTANCE_FAILURE_REJECT_ALL = "reject_all"
+RESISTANCE_FAILURE_POLICIES = (
+    RESISTANCE_FAILURE_IGNORE,
+    RESISTANCE_FAILURE_REJECT_APPROACH,
+    RESISTANCE_FAILURE_REJECT_ALL,
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,8 @@ class A8BacktestConfig:
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
     ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
+    require_support_rebound: bool = False
+    resistance_failure_policy: str = RESISTANCE_FAILURE_IGNORE
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -63,6 +73,10 @@ class A8BacktestConfig:
             raise ValueError("5日線傾き条件は有効または無効で指定してください。")
         if self.ma5_slope_slowdown_policy not in MA5_SLOWDOWN_POLICIES:
             raise ValueError("5日線傾き鈍化条件は対応する選択肢から指定してください。")
+        if not isinstance(self.require_support_rebound, bool):
+            raise ValueError("支持線反発確認は有効または無効で指定してください。")
+        if self.resistance_failure_policy not in RESISTANCE_FAILURE_POLICIES:
+            raise ValueError("抵抗線トライ失敗条件は対応する選択肢から指定してください。")
 
 
 # Compatibility alias for callers using the old name.

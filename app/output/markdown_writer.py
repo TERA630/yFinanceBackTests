@@ -15,6 +15,9 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
+    RESISTANCE_FAILURE_IGNORE,
+    RESISTANCE_FAILURE_REJECT_ALL,
+    RESISTANCE_FAILURE_REJECT_APPROACH,
 )
 
 
@@ -24,6 +27,11 @@ MA5_SLOWDOWN_LABELS = {
     MA5_SLOWDOWN_ALLOW_ONE: "前日・3日前のいずれかのみ許容",
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO: "3日前のみ許容",
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY: "前日のみ許容",
+}
+RESISTANCE_FAILURE_LABELS = {
+    RESISTANCE_FAILURE_IGNORE: "考慮しない",
+    RESISTANCE_FAILURE_REJECT_APPROACH: "接近して失速した場合は除外",
+    RESISTANCE_FAILURE_REJECT_ALL: "接近失速・だまし突破の両方を除外",
 }
 
 
@@ -130,6 +138,8 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 前日25日乖離率: {_percent(row['previous_dev25_pct'])}",
             f"- 直近3日の安値切り下げ回数: {int(row['lower_low_count_3d'])}回",
             f"- 直近3日の高値更新回数: {int(row.get('higher_high_count_3d', 0))}回",
+            f"- 始値時点ATR14: {_price(row.get('atr14_open'))}",
+            f"- 支持線反発: {_support_rebound(row)}",
             f"- エントリー時刻: {_entry_label(row['entry_time'])}",
             f"- VWAP維持確認: {'あり' if row['vwap_confirmation_required'] else 'なし'}",
             f"- 買値: {_price(row['entry_price'])}",
@@ -182,6 +192,8 @@ def _condition_lines(summary: dict) -> list[str]:
         if summary['lower_low_exclude_count'] > 0 else "- 3日間の安値切り下げ除外: なし",
         f"- 3日間の高値更新条件: {summary.get('higher_high_exclude_count', 0)}回以上"
         if summary.get('higher_high_exclude_count', 0) > 0 else "- 3日間の高値更新条件: 考慮しない",
+        f"- 支持線反発: {'確認する' if summary.get('require_support_rebound') else '確認しない'}",
+        f"- 抵抗線トライ失敗: {_resistance_failure_label(summary.get('resistance_failure_policy'))}",
         f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
         f"- 評価件数: {summary['evaluated_count']}",
@@ -217,6 +229,20 @@ def _range_condition(value) -> str:
 
 def _ma5_slowdown_label(value) -> str:
     return MA5_SLOWDOWN_LABELS.get(value, MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
+
+
+def _resistance_failure_label(value) -> str:
+    return RESISTANCE_FAILURE_LABELS.get(value, RESISTANCE_FAILURE_LABELS[RESISTANCE_FAILURE_IGNORE])
+
+
+def _support_rebound(row: pd.Series) -> str:
+    if not row.get("support_rebound", False):
+        return "なし"
+    level_type = row.get("support_level_type")
+    level = row.get("support_level")
+    if level_type is None or level is None or pd.isna(level):
+        return "あり"
+    return f"{level_type} ({_price(level)})"
 
 
 def _first_touch(value) -> str:

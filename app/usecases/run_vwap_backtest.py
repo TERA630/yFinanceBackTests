@@ -19,6 +19,8 @@ from app.domain.vwap_backtest import (
     intraday_entry,
     intraday_range_position_pct,
     is_ma5_slope_slowdown_excluded,
+    RESISTANCE_FAILURE_REJECT_ALL,
+    RESISTANCE_FAILURE_REJECT_APPROACH,
 )
 from app.usecases.watchlist import load_watchlist
 
@@ -69,6 +71,17 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
             higher_high_count = _higher_high_count(daily, daily_position)
             if config.higher_high_exclude_count > 0 and higher_high_count < config.higher_high_exclude_count:
                 skipped["高値更新回数が必要回数未満"] += 1
+                continue
+
+            support_rebound = _support_rebound(row)
+            if config.require_support_rebound:
+                if support_rebound is None:
+                    skipped["支持線反発なし"] += 1
+                    continue
+
+            resistance_failure = _resistance_failure(row, config.resistance_failure_policy)
+            if resistance_failure is not None:
+                skipped[f"抵抗線トライ失敗（{resistance_failure['failure_type']}）"] += 1
                 continue
 
             if config.entry_time == ENTRY_PREV_CLOSE:
@@ -177,6 +190,14 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "previous_dev25_pct": dev25_pct,
                 "lower_low_count_3d": lower_low_count,
                 "higher_high_count_3d": higher_high_count,
+                "atr14_open": _number(row.get("ATR14Open")),
+                "support_rebound": support_rebound is not None,
+                "support_level_type": None if support_rebound is None else support_rebound["level_type"],
+                "support_level": None if support_rebound is None else support_rebound["level"],
+                "resistance_failure_policy": config.resistance_failure_policy,
+                "resistance_failure_type": None if resistance_failure is None else resistance_failure["failure_type"],
+                "resistance_level_type": None if resistance_failure is None else resistance_failure["level_type"],
+                "resistance_level": None if resistance_failure is None else resistance_failure["level"],
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
                 "entry_ma5": entry_ma5,
@@ -216,6 +237,8 @@ def build_summary(
         "range_position_min_pct": config.range_position_min_pct,
         "require_ma5_slope_positive": config.require_ma5_slope_positive,
         "ma5_slope_slowdown_policy": config.ma5_slope_slowdown_policy,
+        "require_support_rebound": config.require_support_rebound,
+        "resistance_failure_policy": config.resistance_failure_policy,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -273,7 +296,82 @@ def _prepare_daily(df: pd.DataFrame) -> pd.DataFrame:
     result.index = pd.DatetimeIndex(result.index).normalize()
     result["MA5"] = pd.to_numeric(result["Close"], errors="coerce").rolling(5).mean()
     result["MA25"] = pd.to_numeric(result["Close"], errors="coerce").rolling(25).mean()
+    close = pd.to_numeric(result["Close"], errors="coerce")
+    high = pd.to_numeric(result["High"], errors="coerce")
+    low = pd.to_numeric(result["Low"], errors="coerce")
+    result["MA25Open"] = close.rolling(25).mean().shift(1)
+    result["MA75Open"] = close.rolling(75).mean().shift(1)
+    result["Low20Open"] = low.rolling(20).min().shift(1)
+    result["Low60Open"] = low.rolling(60).min().shift(1)
+    result["High20Open"] = high.rolling(20).max().shift(1)
+    result["High60Open"] = high.rolling(60).max().shift(1)
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    result["ATR14Open"] = true_range.rolling(14).mean().shift(1)
     return result.sort_index()
+
+
+def _support_rebound(row: pd.Series) -> dict | None:
+    """Return the nearest open-known support that was tested and reclaimed today."""
+    atr = _number(row.get("ATR14Open"))
+    low = _number(row.get("Low"))
+    close = _number(row.get("Close"))
+    if atr is None or atr <= 0 or low is None or close is None:
+        return None
+
+    matches = []
+    for level_type, column in (
+        ("25日線", "MA25Open"),
+        ("20日安値", "Low20Open"),
+        ("60日安値", "Low60Open"),
+        ("75日線", "MA75Open"),
+    ):
+        level = _number(row.get(column))
+        if level is None or level >= close:
+            continue
+        if abs(low - level) <= 0.35 * atr and close >= level + 0.10 * atr:
+            matches.append({"level_type": level_type, "level": level})
+    if not matches:
+        return None
+    return min(matches, key=lambda match: close - match["level"])
+
+
+def _resistance_failure(row: pd.Series, policy: str) -> dict | None:
+    """Return the nearest open-known resistance that rejected today's advance."""
+    if policy not in (RESISTANCE_FAILURE_REJECT_APPROACH, RESISTANCE_FAILURE_REJECT_ALL):
+        return None
+    atr = _number(row.get("ATR14Open"))
+    high = _number(row.get("High"))
+    close = _number(row.get("Close"))
+    if atr is None or atr <= 0 or high is None or close is None:
+        return None
+
+    matches = []
+    for level_type, column in (
+        ("25日線", "MA25Open"),
+        ("20日高値", "High20Open"),
+        ("60日高値", "High60Open"),
+    ):
+        level = _number(row.get(column))
+        if level is None or level <= close:
+            continue
+        close_rejected = close <= level - 0.10 * atr
+        approached_and_stalled = level - 0.35 * atr <= high < level and close_rejected
+        false_breakout = high >= level and close_rejected
+        if approached_and_stalled:
+            matches.append({"level_type": level_type, "level": level, "failure_type": "接近失速"})
+        elif policy == RESISTANCE_FAILURE_REJECT_ALL and false_breakout:
+            matches.append({"level_type": level_type, "level": level, "failure_type": "だまし突破"})
+    if not matches:
+        return None
+    return min(matches, key=lambda match: match["level"] - close)
 
 
 def _provisional_ma25(daily: pd.DataFrame, signal_position: int, entry_price: float):

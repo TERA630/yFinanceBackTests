@@ -9,6 +9,7 @@ from app.domain.vwap_backtest import (
     ENTRY_1400,
     ENTRY_PREV_CLOSE,
     MA5_SLOWDOWN_ALLOW_ONE,
+    RESISTANCE_FAILURE_REJECT_ALL,
 )
 from app.presentation.a8_gui import A8GuiInput, append_saved_condition, default_date_range, summarize_condition
 
@@ -153,6 +154,26 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         )
 
         self.assertIn("5日線鈍化:前日・3日前のいずれかのみ許容", summary)
+
+    def test_condition_summary_includes_support_and_resistance_settings(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_1100,
+                    require_support_rebound=True,
+                    resistance_failure_policy=RESISTANCE_FAILURE_REJECT_ALL,
+                ),
+            )
+        )
+
+        self.assertIn("支持線反発を確認", summary)
+        self.assertIn("抵抗線:接近失速・だまし突破の両方を除外", summary)
 
 
 if __name__ == "__main__":

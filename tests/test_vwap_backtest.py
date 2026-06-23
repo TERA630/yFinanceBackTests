@@ -20,6 +20,8 @@ from app.domain.vwap_backtest import (
     intraday_entry,
     intraday_range_position_pct,
     is_ma5_slope_slowdown_excluded,
+    RESISTANCE_FAILURE_REJECT_ALL,
+    RESISTANCE_FAILURE_REJECT_APPROACH,
 )
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
 from app.usecases.run_vwap_backtest import _higher_high_count, _lower_low_count, build_summary, run_vwap_backtest
@@ -77,6 +79,18 @@ class VwapCalculationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.validate()
 
+    def test_config_rejects_unsupported_resistance_failure_policy(self):
+        config = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "11:00",
+            resistance_failure_policy="unsupported",
+        )
+        with self.assertRaises(ValueError):
+            config.validate()
+
 
 class RangePositionTest(unittest.TestCase):
     def test_calculates_range_position_from_low_to_high(self):
@@ -100,6 +114,84 @@ class RangePositionTest(unittest.TestCase):
         pct = intraday_range_position_pct(rows, pd.Timestamp("2026-06-10"), "11:00", 101.0)
 
         self.assertAlmostEqual(pct, 60.0)
+
+
+class SupportResistanceFilterTest(unittest.TestCase):
+    def _daily_and_intraday(self, *, close: float = 100.0, high: float = 102.0, low: float = 98.0):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=90)
+        signal_date = dates[80]
+        entry_date = dates[81]
+        daily = pd.DataFrame(
+            {
+                "Open": [100.0] * len(dates),
+                "High": [102.0] * len(dates),
+                "Low": [98.0] * len(dates),
+                "Close": [100.0] * len(dates),
+                "Volume": [1000.0] * len(dates),
+            },
+            index=dates,
+        )
+        daily.loc[signal_date, ["Close", "High", "Low"]] = [close, high, low]
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        return dates, signal_date, daily, intraday
+
+    def _run(self, daily, intraday, signal_date, **config_options):
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -5.0,
+            5.0,
+            "11:00",
+            require_vwap_confirmation=False,
+            **config_options,
+        )
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                return run_vwap_backtest(watchlist, config)
+
+    def test_support_rebound_requires_a_test_and_reclaim_of_open_known_support(self):
+        _, signal_date, daily, intraday = self._daily_and_intraday(close=101.0, high=103.0, low=99.0)
+
+        trades, summary = self._run(daily, intraday, signal_date, require_support_rebound=True)
+
+        self.assertEqual(len(trades), 1)
+        self.assertTrue(trades.iloc[0]["support_rebound"])
+        self.assertEqual(trades.iloc[0]["support_level_type"], "25日線")
+        self.assertAlmostEqual(trades.iloc[0]["atr14_open"], 4.0)
+        self.assertTrue(summary["require_support_rebound"])
+
+    def test_approach_failure_policy_rejects_resistance_that_was_not_broken(self):
+        _, signal_date, daily, intraday = self._daily_and_intraday(close=100.0, high=101.5, low=98.0)
+
+        trades, summary = self._run(
+            daily,
+            intraday,
+            signal_date,
+            resistance_failure_policy=RESISTANCE_FAILURE_REJECT_APPROACH,
+        )
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["抵抗線トライ失敗（接近失速）"], 1)
+
+    def test_all_failure_policy_also_rejects_false_breakouts(self):
+        _, signal_date, daily, intraday = self._daily_and_intraday(close=100.0, high=103.0, low=98.0)
+
+        trades, summary = self._run(
+            daily,
+            intraday,
+            signal_date,
+            resistance_failure_policy=RESISTANCE_FAILURE_REJECT_ALL,
+        )
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["抵抗線トライ失敗（だまし突破）"], 1)
 
 
 class Ma5SlopeSlowdownTest(unittest.TestCase):
