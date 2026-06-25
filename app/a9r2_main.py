@@ -1,4 +1,4 @@
-"""Official application entry point for the A9r2 backtest."""
+"""Official application entry point for the A9r3 backtest."""
 
 from __future__ import annotations
 

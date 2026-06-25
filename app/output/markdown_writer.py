@@ -10,6 +10,8 @@ import pandas as pd
 from app.domain.vwap_backtest import (
     EXCURSION_WINDOWS,
     HORIZONS,
+    MA25_NEGATIVE_SLOPE_REJECT,
+    MA25_NEGATIVE_SLOPE_SCORE,
     MA5_SLOWDOWN_ALLOW_ONE,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
@@ -32,6 +34,10 @@ RESISTANCE_FAILURE_LABELS = {
     RESISTANCE_FAILURE_IGNORE: "考慮しない",
     RESISTANCE_FAILURE_REJECT_APPROACH: "接近して失速した場合は除外",
     RESISTANCE_FAILURE_REJECT_ALL: "接近失速・だまし突破の両方を除外",
+}
+MA25_NEGATIVE_SLOPE_LABELS = {
+    MA25_NEGATIVE_SLOPE_REJECT: "即除外",
+    MA25_NEGATIVE_SLOPE_SCORE: "崩れスコアに加点",
 }
 
 
@@ -58,8 +64,8 @@ def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path,
     condition = _filename_condition(summary)
     index = 1
     while True:
-        summary_path = out_dir / f"bt_v9r2_{condition}-{report_date}_summary-{index}.md"
-        result_path = out_dir / f"bt_v9r2_{condition}-{report_date}_result-{index}.md"
+        summary_path = out_dir / f"bt_v9r3_{condition}-{report_date}_summary-{index}.md"
+        result_path = out_dir / f"bt_v9r3_{condition}-{report_date}_result-{index}.md"
         if not summary_path.exists() and not result_path.exists():
             return summary_path, result_path
         index += 1
@@ -67,7 +73,7 @@ def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path,
 
 def _summary_markdown(summary: dict) -> str:
     lines = [
-        "# A9r2バックテスト サマリー",
+        "# A9r3バックテスト サマリー",
         "",
         "## 実行条件",
         "",
@@ -113,7 +119,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
     entry_only_count = _entry_only_count(trades)
     completed_trades = _completed_result_trades(trades)
     lines = [
-        "# A9r2バックテスト 個別結果",
+        "# A9r3バックテスト 個別結果",
         "",
         "## 実行条件",
         "",
@@ -141,9 +147,12 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 始値時点ATR14: {_price(row.get('atr14_open'))}",
             f"- 支持線反発: {_support_rebound(row)}",
             f"- エントリー時刻: {_entry_label(row['entry_time'])}",
-            f"- VWAP維持確認: {'あり' if row['vwap_confirmation_required'] else 'なし'}",
             f"- 買値: {_price(row['entry_price'])}",
             f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
+            f"- 崩れスコア: {_score(row.get('breakdown_score'))}（5日線: {_score(row.get('breakdown_ma5_score'))}）",
+            f"- 崩れ理由: {_text_or_na(row.get('breakdown_reasons'))}",
+            f"- 出来高20日平均比: {_ratio(row.get('breakdown_volume_ratio_20d'))}",
+            f"- 直下支持線距離: {_atr_distance(row.get('nearest_support_distance_atr'))}",
             f"- 当日暫定MA5: {_price(row.get('entry_ma5'))}",
             f"- 5日線傾き: {_percent(row.get('ma5_slope_pct'))}",
             f"- 前日5日線傾き: {_percent(row.get('previous_ma5_slope_pct'))}",
@@ -183,13 +192,13 @@ def _condition_lines(summary: dict) -> list[str]:
     return [
         f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
-        "- 25日線傾き: 横ばい以上（0%以上）",
+        f"- 25日線傾き<0: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
+        f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
         f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
         f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
-        f"- VWAP維持確認: {'あり' if summary['require_vwap_confirmation'] else 'なし'}",
+        "- VWAP: 単独除外なし（崩れスコアで判定）",
         f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
-        f"- 3日間の安値切り下げ除外: {summary['lower_low_exclude_count']}回以上"
-        if summary['lower_low_exclude_count'] > 0 else "- 3日間の安値切り下げ除外: なし",
+        f"- 3日間の安値切り下げ: {_lower_low_condition(summary.get('lower_low_exclude_count'))}",
         f"- 3日間の高値更新条件: {summary.get('higher_high_exclude_count', 0)}回以上"
         if summary.get('higher_high_exclude_count', 0) > 0 else "- 3日間の高値更新条件: 考慮しない",
         f"- 支持線反発: {'確認する' if summary.get('require_support_rebound') else '確認しない'}",
@@ -227,12 +236,32 @@ def _range_condition(value) -> str:
     return "考慮せず" if value is None or pd.isna(value) else f"{float(value):g}%以上"
 
 
+def _lower_low_condition(value) -> str:
+    labels = {
+        0: "考慮しない",
+        1: "3日のうち1回でも安値切下げ",
+        2: "3日のうち2回安値切下げ",
+        3: "3日連続安値切下げ",
+    }
+    if value is None or pd.isna(value):
+        return labels[0]
+    return labels.get(int(value), labels[0])
+
+
 def _ma5_slowdown_label(value) -> str:
     return MA5_SLOWDOWN_LABELS.get(value, MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
 
 
 def _resistance_failure_label(value) -> str:
     return RESISTANCE_FAILURE_LABELS.get(value, RESISTANCE_FAILURE_LABELS[RESISTANCE_FAILURE_IGNORE])
+
+
+def _ma25_negative_slope_label(value) -> str:
+    return MA25_NEGATIVE_SLOPE_LABELS.get(value, MA25_NEGATIVE_SLOPE_LABELS[MA25_NEGATIVE_SLOPE_REJECT])
+
+
+def _breakdown_score_condition(value) -> str:
+    return "考慮しない" if value is None or pd.isna(value) else f"{int(value)}点以上を除外"
 
 
 def _support_rebound(row: pd.Series) -> str:
@@ -259,3 +288,21 @@ def _price(value) -> str:
 
 def _percent(value) -> str:
     return "N/A" if value is None or pd.isna(value) else f"{float(value):.2f}%"
+
+
+def _ratio(value) -> str:
+    return "N/A" if value is None or pd.isna(value) else f"{float(value) * 100.0:.2f}%"
+
+
+def _atr_distance(value) -> str:
+    return "N/A" if value is None or pd.isna(value) else f"{float(value):.2f}ATR"
+
+
+def _score(value) -> str:
+    return "N/A" if value is None or pd.isna(value) else f"{int(value)}点"
+
+
+def _text_or_na(value) -> str:
+    if value is None or pd.isna(value) or value == "":
+        return "N/A"
+    return str(value)

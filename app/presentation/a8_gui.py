@@ -1,4 +1,4 @@
-"""Single-window input form for the A9r2 backtest."""
+"""Single-window input form for the A9r3 backtest."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ from app.domain.vwap_backtest import (
     ENTRY_1100,
     ENTRY_1400,
     ENTRY_PREV_CLOSE,
+    MA25_NEGATIVE_SLOPE_REJECT,
+    MA25_NEGATIVE_SLOPE_SCORE,
     MA5_SLOWDOWN_ALLOW_ONE,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
@@ -50,6 +52,26 @@ RESISTANCE_FAILURE_LABELS = {
     RESISTANCE_FAILURE_REJECT_ALL: "接近失速・だまし突破の両方を除外",
 }
 RESISTANCE_FAILURE_VALUES = {label: value for value, label in RESISTANCE_FAILURE_LABELS.items()}
+LOWER_LOW_LABELS = {
+    0: "考慮しない",
+    1: "3日のうち1回でも安値切下げ",
+    2: "3日のうち2回安値切下げ",
+    3: "3日連続安値切下げ",
+}
+LOWER_LOW_VALUES = {label: value for value, label in LOWER_LOW_LABELS.items()}
+MA25_NEGATIVE_SLOPE_LABELS = {
+    MA25_NEGATIVE_SLOPE_REJECT: "即除外",
+    MA25_NEGATIVE_SLOPE_SCORE: "崩れスコアに加点",
+}
+MA25_NEGATIVE_SLOPE_VALUES = {label: value for value, label in MA25_NEGATIVE_SLOPE_LABELS.items()}
+BREAKDOWN_SCORE_VALUES = {
+    "考慮しない": None,
+    "4点以上": 4,
+    "5点以上": 5,
+    "6点以上": 6,
+    "7点以上": 7,
+    "8点以上": 8,
+}
 
 
 @dataclass(frozen=True)
@@ -66,13 +88,8 @@ def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit
 
 def summarize_condition(gui_input: A8GuiInput) -> str:
     config = gui_input.config
-    vwap_label = "VWAPあり" if config.require_vwap_confirmation else "VWAPなし"
     entry_label = "前日終値" if config.entry_time == ENTRY_PREV_CLOSE else config.entry_time
-    lower_low_label = (
-        "安値除外なし"
-        if config.lower_low_exclude_count == 0
-        else f"安値{config.lower_low_exclude_count}回以上除外"
-    )
+    lower_low_label = f"安値切下げ:{LOWER_LOW_LABELS.get(config.lower_low_exclude_count, '考慮しない')}"
     higher_high_label = (
         "高値更新考慮なし"
         if config.higher_high_exclude_count == 0
@@ -87,10 +104,17 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
     ma5_slowdown_label = MA5_SLOWDOWN_LABELS.get(config.ma5_slope_slowdown_policy, "考慮しない")
     support_label = "支持線反発を確認" if config.require_support_rebound else "支持線反発を確認しない"
     resistance_label = RESISTANCE_FAILURE_LABELS.get(config.resistance_failure_policy, "考慮しない")
+    ma25_slope_label = MA25_NEGATIVE_SLOPE_LABELS.get(config.ma25_negative_slope_policy, "即除外")
+    breakdown_label = (
+        "崩れスコア考慮なし"
+        if config.breakdown_score_threshold is None
+        else f"崩れスコア{config.breakdown_score_threshold}点以上除外"
+    )
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
-        f"{vwap_label} / {entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
-        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / {support_label} / 抵抗線:{resistance_label}"
+        f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
+        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線<0:{ma25_slope_label} / "
+        f"{breakdown_label} / {support_label} / 抵抗線:{resistance_label}"
     )
 
 
@@ -107,8 +131,8 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
 
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
-    win.title("A9r2 バックテスト条件設定")
-    win.geometry("720x870")
+    win.title("A9r3 バックテスト条件設定")
+    win.geometry("720x930")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -119,14 +143,15 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     min_var = tk.StringVar(value="-5.0")
     max_var = tk.StringVar(value="5.0")
     entry_var = tk.StringVar(value=ENTRY_1100)
-    require_vwap_var = tk.BooleanVar(value=True)
-    lower_low_var = tk.StringVar(value="0回")
+    lower_low_var = tk.StringVar(value=LOWER_LOW_LABELS[0])
     higher_high_var = tk.StringVar(value="考慮しない")
     range_position_var = tk.StringVar(value="考慮せず")
     require_ma5_slope_var = tk.BooleanVar(value=False)
     ma5_slowdown_var = tk.StringVar(value=MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
     require_support_rebound_var = tk.BooleanVar(value=False)
     resistance_failure_var = tk.StringVar(value=RESISTANCE_FAILURE_LABELS[RESISTANCE_FAILURE_IGNORE])
+    ma25_negative_slope_var = tk.StringVar(value=MA25_NEGATIVE_SLOPE_LABELS[MA25_NEGATIVE_SLOPE_REJECT])
+    breakdown_score_var = tk.StringVar(value="5点以上")
     default_start, default_end = default_date_range()
 
     ttk.Label(frame, text="開始日").grid(row=0, column=0, sticky="w", pady=6)
@@ -171,13 +196,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     ttk.Label(frame, text="25日乖離率 最高値 (%)").grid(row=5, column=0, sticky="w", pady=6)
     ttk.Entry(frame, textvariable=max_var, width=16).grid(row=5, column=1, sticky="w")
 
-    ttk.Checkbutton(
-        frame,
-        text="VWAP維持を確認してからエントリー",
-        variable=require_vwap_var,
-    ).grid(row=6, column=0, columnspan=2, sticky="w", pady=6)
-
-    ttk.Label(frame, text="エントリー時刻").grid(row=7, column=0, sticky="w", pady=6)
+    ttk.Label(frame, text="エントリー時刻").grid(row=6, column=0, sticky="w", pady=6)
     entry_box = ttk.Combobox(
         frame,
         textvariable=entry_var,
@@ -185,64 +204,90 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         state="readonly",
         width=14,
     )
-    entry_box.grid(row=7, column=1, sticky="w")
+    entry_box.grid(row=6, column=1, sticky="w")
 
-    ttk.Label(frame, text="3日間の安値切り下げ除外").grid(row=8, column=0, sticky="w", pady=6)
+    exclusion_frame = ttk.LabelFrame(frame, text="単項目除外")
+    exclusion_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+    exclusion_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(exclusion_frame, text="3日間の安値切り下げ").grid(row=0, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
-        frame,
+        exclusion_frame,
         textvariable=lower_low_var,
-        values=("0回", "1回", "2回", "3回"),
+        values=tuple(LOWER_LOW_VALUES.keys()),
         state="readonly",
-        width=14,
-    ).grid(row=8, column=1, sticky="w")
+        width=26,
+    ).grid(row=0, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(frame, text="終端位置").grid(row=9, column=0, sticky="w", pady=6)
+    ttk.Label(exclusion_frame, text="終端位置").grid(row=1, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
-        frame,
+        exclusion_frame,
         textvariable=range_position_var,
         values=("考慮せず", "30%以上", "40%以上", "50%以上", "60%以上"),
         state="readonly",
         width=14,
-    ).grid(row=9, column=1, sticky="w")
+    ).grid(row=1, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(frame, text="3日間の高値更新条件").grid(row=10, column=0, sticky="w", pady=6)
+    ttk.Label(exclusion_frame, text="3日間の高値更新条件").grid(row=2, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
-        frame,
+        exclusion_frame,
         textvariable=higher_high_var,
         values=("考慮しない", "1回以上", "2回以上", "3回"),
         state="readonly",
         width=14,
-    ).grid(row=10, column=1, sticky="w")
+    ).grid(row=2, column=1, sticky="w", padx=10, pady=6)
 
     ttk.Checkbutton(
-        frame,
+        exclusion_frame,
         text="5日線傾き > 0 を条件にする",
         variable=require_ma5_slope_var,
-    ).grid(row=11, column=0, columnspan=2, sticky="w", pady=6)
+    ).grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=6)
 
-    ttk.Label(frame, text="5日線傾き鈍化").grid(row=12, column=0, sticky="w", pady=6)
+    ttk.Label(exclusion_frame, text="5日線傾き鈍化").grid(row=4, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
-        frame,
+        exclusion_frame,
         textvariable=ma5_slowdown_var,
         values=tuple(MA5_SLOWDOWN_VALUES.keys()),
         state="readonly",
         width=30,
-    ).grid(row=12, column=1, sticky="w")
+    ).grid(row=4, column=1, sticky="w", padx=10, pady=6)
+
+    ttk.Label(exclusion_frame, text="25日線傾き<0").grid(row=5, column=0, sticky="w", padx=10, pady=6)
+    ttk.Combobox(
+        exclusion_frame,
+        textvariable=ma25_negative_slope_var,
+        values=tuple(MA25_NEGATIVE_SLOPE_VALUES.keys()),
+        state="readonly",
+        width=18,
+    ).grid(row=5, column=1, sticky="w", padx=10, pady=6)
+
+    score_frame = ttk.LabelFrame(frame, text="崩れスコア")
+    score_frame.grid(row=8, column=0, columnspan=3, sticky="ew", pady=6)
+    score_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(score_frame, text="崩れスコア除外").grid(row=0, column=0, sticky="w", padx=10, pady=6)
+    ttk.Combobox(
+        score_frame,
+        textvariable=breakdown_score_var,
+        values=tuple(BREAKDOWN_SCORE_VALUES.keys()),
+        state="readonly",
+        width=18,
+    ).grid(row=0, column=1, sticky="w", padx=10, pady=6)
 
     ttk.Checkbutton(
         frame,
         text="支持線反発を確認する",
         variable=require_support_rebound_var,
-    ).grid(row=13, column=0, columnspan=2, sticky="w", pady=6)
+    ).grid(row=9, column=0, columnspan=2, sticky="w", pady=6)
 
-    ttk.Label(frame, text="抵抗線トライ失敗").grid(row=14, column=0, sticky="w", pady=6)
+    ttk.Label(frame, text="抵抗線トライ失敗").grid(row=10, column=0, sticky="w", pady=6)
     ttk.Combobox(
         frame,
         textvariable=resistance_failure_var,
         values=tuple(RESISTANCE_FAILURE_VALUES.keys()),
         state="readonly",
         width=30,
-    ).grid(row=14, column=1, sticky="w")
+    ).grid(row=10, column=1, sticky="w")
 
     help_var = tk.StringVar()
     help_label = ttk.Label(
@@ -250,40 +295,25 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         textvariable=help_var,
         foreground="#555555",
     )
-    help_label.grid(row=15, column=0, columnspan=3, sticky="w", pady=(10, 16))
-
-    def update_vwap_controls() -> None:
-        if require_vwap_var.get():
-            entry_box.configure(values=("前日終値", ENTRY_1100, ENTRY_1400))
-            help_var.set(
-                "指定時刻にVWAP維持を確認し、維持している場合だけエントリーします。\n"
-                "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
-            )
-        else:
-            entry_box.configure(values=(ENTRY_1100, ENTRY_1400))
-            if entry_var.get() in ("前日終値", ENTRY_PREV_CLOSE):
-                entry_var.set(ENTRY_1100)
-            help_var.set(
-                "VWAPとの位置関係を判定せず、11時または14時の価格でエントリーします。\n"
-                "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
-            )
-
-    require_vwap_var.trace_add("write", lambda *_: update_vwap_controls())
-    update_vwap_controls()
+    help_label.grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 16))
+    help_var.set(
+        "VWAPは単独除外せず、崩れスコアの材料として判定します。\n"
+        "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
+    )
 
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
-    ttk.Label(frame, text="保存済み条件").grid(row=16, column=0, sticky="nw", pady=(8, 4))
+    ttk.Label(frame, text="保存済み条件").grid(row=12, column=0, sticky="nw", pady=(8, 4))
     queue_frame = ttk.Frame(frame)
-    queue_frame.grid(row=16, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    queue_frame.grid(row=12, column=1, columnspan=2, sticky="w", pady=(8, 4))
     queue_list = tk.Listbox(queue_frame, width=78, height=5)
     queue_xscroll = ttk.Scrollbar(queue_frame, orient=tk.HORIZONTAL, command=queue_list.xview)
     queue_list.configure(xscrollcommand=queue_xscroll.set)
     queue_list.grid(row=0, column=0, sticky="w")
     queue_xscroll.grid(row=1, column=0, sticky="ew")
     ttk.Label(frame, textvariable=saved_count_var, foreground="#555555").grid(
-        row=17, column=1, columnspan=2, sticky="w", pady=(0, 8)
+        row=13, column=1, columnspan=2, sticky="w", pady=(0, 8)
     )
 
     def refresh_queue_list() -> None:
@@ -314,14 +344,15 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             dev25_min=float(min_var.get()),
             dev25_max=float(max_var.get()),
             entry_time=entry_time,
-            lower_low_exclude_count=int(lower_low_var.get().removesuffix("回")),
+            lower_low_exclude_count=LOWER_LOW_VALUES[lower_low_var.get()],
             higher_high_exclude_count=higher_high_exclude_count,
-            require_vwap_confirmation=require_vwap_var.get(),
             range_position_min_pct=range_position_min_pct,
             require_ma5_slope_positive=require_ma5_slope_var.get(),
             ma5_slope_slowdown_policy=MA5_SLOWDOWN_VALUES[ma5_slowdown_var.get()],
             require_support_rebound=require_support_rebound_var.get(),
             resistance_failure_policy=RESISTANCE_FAILURE_VALUES[resistance_failure_var.get()],
+            ma25_negative_slope_policy=MA25_NEGATIVE_SLOPE_VALUES[ma25_negative_slope_var.get()],
+            breakdown_score_threshold=BREAKDOWN_SCORE_VALUES[breakdown_score_var.get()],
         )
         config.validate()
         oldest = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
@@ -358,7 +389,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         win.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=18, column=0, columnspan=3, pady=8)
+    buttons.grid(row=14, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)
@@ -375,7 +406,7 @@ def show_a8_completion(summary_path: Path, result_path: Path) -> None:
         return
     root = tk.Tk()
     root.withdraw()
-    messagebox.showinfo("完了", f"A9r2バックテストが完了しました。\n\n{summary_path}\n{result_path}")
+    messagebox.showinfo("完了", f"A9r3バックテストが完了しました。\n\n{summary_path}\n{result_path}")
     root.destroy()
 
 
@@ -387,7 +418,7 @@ def show_a8_batch_completion(
         return
     root = tk.Tk()
     root.withdraw()
-    lines = [f"A9r2バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"]
+    lines = [f"A9r3バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"]
     for index, (summary_path, result_path) in enumerate(outputs, start=1):
         lines.append("")
         lines.append(f"[成功 {index}]")

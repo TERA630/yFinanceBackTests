@@ -69,18 +69,18 @@ class A8GuiSavedConditionTests(unittest.TestCase):
                     4.0,
                     ENTRY_1400,
                     lower_low_exclude_count=2,
-                    require_vwap_confirmation=False,
                     require_ma5_slope_positive=True,
                 ),
             )
         )
 
         self.assertIn("25日乖離 -3.5%超-4%以下", summary)
-        self.assertIn("VWAPなし", summary)
         self.assertIn("14:00", summary)
-        self.assertIn("安値2回以上除外", summary)
+        self.assertIn("安値切下げ:3日のうち2回安値切下げ", summary)
         self.assertIn("高値更新考慮なし", summary)
         self.assertIn("5日線上向き", summary)
+        self.assertIn("25日線<0:即除外", summary)
+        self.assertIn("崩れスコア考慮なし", summary)
         self.assertNotIn("watchlist", summary)
         self.assertNotIn("2026-06", summary)
 

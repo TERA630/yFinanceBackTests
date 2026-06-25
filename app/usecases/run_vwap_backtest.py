@@ -14,11 +14,14 @@ from app.domain.vwap_backtest import (
     ENTRY_PREV_CLOSE,
     HORIZONS,
     A8BacktestConfig,
+    BreakdownScoreInput,
     build_trade_metrics,
+    calculate_breakdown_score,
     calculate_range_position_pct,
     intraday_entry,
     intraday_range_position_pct,
     is_ma5_slope_slowdown_excluded,
+    MA25_NEGATIVE_SLOPE_REJECT,
     RESISTANCE_FAILURE_REJECT_ALL,
     RESISTANCE_FAILURE_REJECT_APPROACH,
 )
@@ -34,7 +37,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     print("[2/3] 5分足データ取得")
     intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
-    print("[3/3] A9r2バックテスト")
+    print("[3/3] A9r3バックテスト")
 
     records: List[dict] = []
     skipped = Counter()
@@ -65,6 +68,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 continue
 
             lower_low_count = _lower_low_count(daily, daily_position)
+            higher_low_count = _higher_low_count(daily, daily_position)
             if config.lower_low_exclude_count > 0 and lower_low_count >= config.lower_low_exclude_count:
                 skipped["安値切り下げ回数が除外基準以上"] += 1
                 continue
@@ -88,15 +92,15 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 entry_date = signal_date
                 entry = intraday_entry(intraday, entry_date, "15:30")
                 entry_price = previous_close
-                if entry is None or (config.require_vwap_confirmation and entry[1] is None):
-                    skipped["前日分足データなし"] += 1
-                    continue
-                _, vwap = entry
+                vwap = None if entry is None else entry[1]
                 entry_ma25 = ma25
                 previous_ma25 = _number(daily["MA25"].iloc[daily_position - 1]) if daily_position > 0 else None
                 entry_ma5 = ma5
                 previous_ma5 = _number(daily["MA5"].iloc[daily_position - 1]) if daily_position > 0 else None
                 entry_position = daily_position
+                support_row = row
+                breakdown_candle = _daily_candle(row)
+                breakdown_volume_ratio_20d = _daily_volume_ratio(row)
                 range_position_pct = calculate_range_position_pct(
                     _number(row.get("Low")),
                     _number(row.get("High")),
@@ -108,19 +112,25 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     skipped["翌営業日データなし"] += 1
                     continue
                 entry_date = pd.Timestamp(daily.index[next_position])
+                entry_row = daily.iloc[next_position]
                 entry = intraday_entry(intraday, entry_date, config.entry_time)
                 if entry is None:
                     skipped["指定時刻の分足データなし"] += 1
                     continue
                 entry_price, vwap = entry
-                if config.require_vwap_confirmation and vwap is None:
-                    skipped["VWAPを計算できない"] += 1
-                    continue
                 entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
                 previous_ma25 = ma25
                 entry_ma5 = _provisional_ma(daily, daily_position, entry_price, 5)
                 previous_ma5 = ma5
                 entry_position = next_position
+                support_row = entry_row
+                breakdown_candle = _intraday_candle(intraday, entry_date, config.entry_time, entry_price)
+                breakdown_volume_ratio_20d = _intraday_volume_ratio(
+                    intraday,
+                    entry_date,
+                    config.entry_time,
+                    _number(entry_row.get("VolumeAvg20Open")),
+                )
                 range_position_pct = intraday_range_position_pct(
                     intraday,
                     entry_date,
@@ -149,7 +159,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["25日線傾きを計算できない"] += 1
                 continue
             ma25_slope_pct = (entry_ma25 / previous_ma25 - 1.0) * 100.0
-            if ma25_slope_pct < 0.0:
+            if ma25_slope_pct < 0.0 and config.ma25_negative_slope_policy == MA25_NEGATIVE_SLOPE_REJECT:
                 skipped["25日線が下向き"] += 1
                 continue
 
@@ -174,8 +184,31 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["5日線傾き鈍化"] += 1
                 continue
 
-            if config.require_vwap_confirmation and entry_price < vwap:
-                skipped["VWAP未維持"] += 1
+            nearest_support_distance_atr = _nearest_support_distance_atr(support_row, entry_price)
+            breakdown_score = calculate_breakdown_score(
+                BreakdownScoreInput(
+                    entry_price=entry_price,
+                    vwap=vwap,
+                    higher_low_count_3d=higher_low_count,
+                    higher_high_count_3d=higher_high_count,
+                    range_position_pct=range_position_pct,
+                    volume_ratio_20d=breakdown_volume_ratio_20d,
+                    open_price=breakdown_candle.get("open"),
+                    high_price=breakdown_candle.get("high"),
+                    low_price=breakdown_candle.get("low"),
+                    close_price=breakdown_candle.get("close"),
+                    nearest_support_distance_atr=nearest_support_distance_atr,
+                    ma25_slope_pct=ma25_slope_pct,
+                    ma5_slope_pct=ma5_slope_pct,
+                    previous_ma5_slope_pct=previous_ma5_slope_pct,
+                    three_days_ago_ma5_slope_pct=three_days_ago_ma5_slope_pct,
+                )
+            )
+            if (
+                config.breakdown_score_threshold is not None
+                and breakdown_score.total >= config.breakdown_score_threshold
+            ):
+                skipped[f"崩れスコア{config.breakdown_score_threshold}点以上"] += 1
                 continue
 
             record = {
@@ -184,22 +217,28 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "name": name,
                 "code": code,
                 "entry_time": config.entry_time,
-                "vwap_confirmation_required": config.require_vwap_confirmation,
+                "vwap_confirmation_required": False,
                 "previous_close": previous_close,
                 "previous_ma25": ma25,
                 "previous_dev25_pct": dev25_pct,
                 "lower_low_count_3d": lower_low_count,
+                "higher_low_count_3d": higher_low_count,
                 "higher_high_count_3d": higher_high_count,
                 "atr14_open": _number(row.get("ATR14Open")),
                 "support_rebound": support_rebound is not None,
                 "support_level_type": None if support_rebound is None else support_rebound["level_type"],
                 "support_level": None if support_rebound is None else support_rebound["level"],
+                "nearest_support_distance_atr": nearest_support_distance_atr,
                 "resistance_failure_policy": config.resistance_failure_policy,
                 "resistance_failure_type": None if resistance_failure is None else resistance_failure["failure_type"],
                 "resistance_level_type": None if resistance_failure is None else resistance_failure["level_type"],
                 "resistance_level": None if resistance_failure is None else resistance_failure["level"],
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
+                "breakdown_volume_ratio_20d": breakdown_volume_ratio_20d,
+                "breakdown_score": breakdown_score.total,
+                "breakdown_ma5_score": breakdown_score.ma5_score,
+                "breakdown_reasons": " / ".join(breakdown_score.reasons),
                 "entry_ma5": entry_ma5,
                 "ma5_slope_pct": ma5_slope_pct,
                 "previous_ma5_slope_pct": previous_ma5_slope_pct,
@@ -239,6 +278,8 @@ def build_summary(
         "ma5_slope_slowdown_policy": config.ma5_slope_slowdown_policy,
         "require_support_rebound": config.require_support_rebound,
         "resistance_failure_policy": config.resistance_failure_policy,
+        "ma25_negative_slope_policy": config.ma25_negative_slope_policy,
+        "breakdown_score_threshold": config.breakdown_score_threshold,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -305,6 +346,7 @@ def _prepare_daily(df: pd.DataFrame) -> pd.DataFrame:
     result["Low60Open"] = low.rolling(60).min().shift(1)
     result["High20Open"] = high.rolling(20).max().shift(1)
     result["High60Open"] = high.rolling(60).max().shift(1)
+    result["VolumeAvg20Open"] = pd.to_numeric(result["Volume"], errors="coerce").rolling(20).mean().shift(1)
     previous_close = close.shift(1)
     true_range = pd.concat(
         [
@@ -400,6 +442,12 @@ def _higher_high_count(daily: pd.DataFrame, signal_position: int) -> int:
     return int((highs.diff() > 0).iloc[-3:].fillna(False).sum())
 
 
+def _higher_low_count(daily: pd.DataFrame, signal_position: int) -> int:
+    start = max(0, signal_position - 3)
+    lows = pd.to_numeric(daily["Low"].iloc[start:signal_position + 1], errors="coerce")
+    return int((lows.diff() > 0).iloc[-3:].fillna(False).sum())
+
+
 def _ma_slope_pct_at(daily: pd.DataFrame, position: int, window: int):
     if position <= 0 or position >= len(daily):
         return None
@@ -411,6 +459,82 @@ def _ma_slope_pct_at(daily: pd.DataFrame, position: int, window: int):
     if current in (None, 0) or previous in (None, 0):
         return None
     return (current / previous - 1.0) * 100.0
+
+
+def _daily_candle(row: pd.Series) -> dict[str, float | None]:
+    return {
+        "open": _number(row.get("Open")),
+        "high": _number(row.get("High")),
+        "low": _number(row.get("Low")),
+        "close": _number(row.get("Close")),
+    }
+
+
+def _daily_volume_ratio(row: pd.Series):
+    average = _number(row.get("VolumeAvg20Open"))
+    volume = _number(row.get("Volume"))
+    if average in (None, 0) or volume is None:
+        return None
+    return volume / average
+
+
+def _intraday_candle(
+    intraday: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    cutoff: str,
+    entry_price: float,
+) -> dict[str, float | None]:
+    eligible = _eligible_intraday(intraday, trade_date, cutoff)
+    if eligible.empty:
+        return {"open": None, "high": None, "low": None, "close": entry_price}
+    open_source = eligible["Open"] if "Open" in eligible.columns else eligible["Close"]
+    return {
+        "open": _number(open_source.iloc[0]),
+        "high": _number(pd.to_numeric(eligible["High"], errors="coerce").max()),
+        "low": _number(pd.to_numeric(eligible["Low"], errors="coerce").min()),
+        "close": entry_price,
+    }
+
+
+def _intraday_volume_ratio(
+    intraday: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    cutoff: str,
+    average_volume_20d,
+):
+    average = _number(average_volume_20d)
+    if average in (None, 0):
+        return None
+    eligible = _eligible_intraday(intraday, trade_date, cutoff)
+    if eligible.empty or "Volume" not in eligible.columns:
+        return None
+    volume = _number(pd.to_numeric(eligible["Volume"], errors="coerce").fillna(0.0).sum())
+    return None if volume is None else volume / average
+
+
+def _eligible_intraday(intraday: pd.DataFrame, trade_date: pd.Timestamp, cutoff: str) -> pd.DataFrame:
+    if intraday is None or intraday.empty:
+        return pd.DataFrame()
+    day = intraday.loc[intraday.index.normalize() == pd.Timestamp(trade_date).normalize()]
+    if day.empty:
+        return pd.DataFrame()
+    cutoff_time = pd.Timestamp(f"{pd.Timestamp(trade_date).date()} {cutoff}")
+    return day.loc[day.index < cutoff_time]
+
+
+def _nearest_support_distance_atr(row: pd.Series, price: float):
+    atr = _number(row.get("ATR14Open"))
+    if atr is None or atr <= 0 or price is None:
+        return None
+    levels = []
+    for column in ("MA25Open", "Low20Open", "Low60Open", "MA75Open"):
+        level = _number(row.get(column))
+        if level is not None and level < price:
+            levels.append(level)
+    if not levels:
+        return None
+    nearest = max(levels)
+    return (price - nearest) / atr
 
 
 def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:

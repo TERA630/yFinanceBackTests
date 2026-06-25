@@ -34,6 +34,12 @@ RESISTANCE_FAILURE_POLICIES = (
     RESISTANCE_FAILURE_REJECT_APPROACH,
     RESISTANCE_FAILURE_REJECT_ALL,
 )
+MA25_NEGATIVE_SLOPE_REJECT = "reject"
+MA25_NEGATIVE_SLOPE_SCORE = "score"
+MA25_NEGATIVE_SLOPE_POLICIES = (
+    MA25_NEGATIVE_SLOPE_REJECT,
+    MA25_NEGATIVE_SLOPE_SCORE,
+)
 
 
 @dataclass(frozen=True)
@@ -45,12 +51,14 @@ class A8BacktestConfig:
     entry_time: str
     lower_low_exclude_count: int = 0
     higher_high_exclude_count: int = 0
-    require_vwap_confirmation: bool = True
+    require_vwap_confirmation: bool = False
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
     ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
     require_support_rebound: bool = False
     resistance_failure_policy: str = RESISTANCE_FAILURE_IGNORE
+    ma25_negative_slope_policy: str = MA25_NEGATIVE_SLOPE_REJECT
+    breakdown_score_threshold: Optional[int] = None
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -61,8 +69,6 @@ class A8BacktestConfig:
             raise ValueError("25日乖離率の最低値は最高値より小さくしてください。")
         if self.entry_time not in ENTRY_TIMES:
             raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
-        if not self.require_vwap_confirmation and self.entry_time == ENTRY_PREV_CLOSE:
-            raise ValueError("VWAP維持確認なしでは、エントリー時刻を11:00または14:00にしてください。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):
             raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
         if self.higher_high_exclude_count not in (0, 1, 2, 3):
@@ -77,6 +83,13 @@ class A8BacktestConfig:
             raise ValueError("支持線反発確認は有効または無効で指定してください。")
         if self.resistance_failure_policy not in RESISTANCE_FAILURE_POLICIES:
             raise ValueError("抵抗線トライ失敗条件は対応する選択肢から指定してください。")
+        if self.ma25_negative_slope_policy not in MA25_NEGATIVE_SLOPE_POLICIES:
+            raise ValueError("25日線傾き<0の扱いは対応する選択肢から指定してください。")
+        if self.breakdown_score_threshold is not None:
+            if not isinstance(self.breakdown_score_threshold, int):
+                raise ValueError("崩れスコア除外閾値は整数で指定してください。")
+            if not 0 <= self.breakdown_score_threshold <= 11:
+                raise ValueError("崩れスコア除外閾値は0～11点で指定してください。")
 
 
 # Compatibility alias for callers using the old name.
@@ -92,6 +105,32 @@ class EntryCandidate:
     dev25_pct: float
     entry_price: float
     vwap: float
+
+
+@dataclass(frozen=True)
+class BreakdownScoreInput:
+    entry_price: Optional[float]
+    vwap: Optional[float]
+    higher_low_count_3d: int
+    higher_high_count_3d: int
+    range_position_pct: Optional[float]
+    volume_ratio_20d: Optional[float]
+    open_price: Optional[float]
+    high_price: Optional[float]
+    low_price: Optional[float]
+    close_price: Optional[float]
+    nearest_support_distance_atr: Optional[float]
+    ma25_slope_pct: Optional[float]
+    ma5_slope_pct: Optional[float]
+    previous_ma5_slope_pct: Optional[float]
+    three_days_ago_ma5_slope_pct: Optional[float]
+
+
+@dataclass(frozen=True)
+class BreakdownScore:
+    total: int
+    ma5_score: int
+    reasons: tuple[str, ...]
 
 
 def calculate_vwap(rows: pd.DataFrame) -> Optional[float]:
@@ -152,6 +191,96 @@ def calculate_range_position_pct(
     if range_width <= 0:
         return None
     return (price_value - low_value) / range_width * 100.0
+
+
+def is_upper_stall(
+    open_price: Optional[float],
+    high_price: Optional[float],
+    low_price: Optional[float],
+    close_price: Optional[float],
+) -> bool:
+    values = (open_price, high_price, low_price, close_price)
+    if any(value is None or pd.isna(value) for value in values):
+        return False
+    open_value = float(open_price)
+    high_value = float(high_price)
+    low_value = float(low_price)
+    close_value = float(close_price)
+    day_range = high_value - low_value
+    if day_range <= 0:
+        return False
+    upper_wick = high_value - max(open_value, close_value)
+    body = abs(close_value - open_value)
+    return upper_wick / day_range >= 0.45 and upper_wick >= body * 1.5
+
+
+def calculate_ma5_breakdown_score(
+    ma5_slope_pct: Optional[float],
+    previous_ma5_slope_pct: Optional[float],
+    three_days_ago_ma5_slope_pct: Optional[float],
+) -> int:
+    score = 0
+    if ma5_slope_pct is not None:
+        if ma5_slope_pct <= 0:
+            score += 2
+        if previous_ma5_slope_pct is not None and ma5_slope_pct < previous_ma5_slope_pct:
+            score += 1
+        if three_days_ago_ma5_slope_pct is not None and ma5_slope_pct < three_days_ago_ma5_slope_pct:
+            score += 1
+    return min(score, 3)
+
+
+def calculate_breakdown_score(inputs: BreakdownScoreInput) -> BreakdownScore:
+    score = 0
+    reasons: list[str] = []
+
+    if inputs.entry_price is not None and inputs.vwap is not None and inputs.entry_price < inputs.vwap:
+        score += 1
+        reasons.append("VWAP未満")
+
+    if inputs.higher_low_count_3d <= 0:
+        score += 1
+        reasons.append("3日安値切り上げなし")
+
+    if inputs.higher_high_count_3d <= 0:
+        score += 1
+        reasons.append("3日高値更新なし")
+
+    if inputs.range_position_pct is not None and inputs.range_position_pct < 40.0:
+        score += 1
+        reasons.append("終端位置40%未満")
+
+    is_bear = (
+        inputs.open_price is not None
+        and inputs.close_price is not None
+        and inputs.close_price < inputs.open_price
+    )
+    if (
+        inputs.volume_ratio_20d is not None
+        and inputs.volume_ratio_20d >= 1.0
+        and (is_bear or is_upper_stall(inputs.open_price, inputs.high_price, inputs.low_price, inputs.close_price))
+    ):
+        score += 1
+        reasons.append("出来高増で陰線または上値失速")
+
+    if inputs.nearest_support_distance_atr is not None and inputs.nearest_support_distance_atr > 0.7:
+        score += 1
+        reasons.append("直下支持線が遠い")
+
+    if inputs.ma25_slope_pct is not None and inputs.ma25_slope_pct <= 0:
+        score += 2
+        reasons.append("25日線横ばい以下")
+
+    ma5_score = calculate_ma5_breakdown_score(
+        inputs.ma5_slope_pct,
+        inputs.previous_ma5_slope_pct,
+        inputs.three_days_ago_ma5_slope_pct,
+    )
+    if ma5_score > 0:
+        score += ma5_score
+        reasons.append(f"5日線スコア{ma5_score}点")
+
+    return BreakdownScore(total=score, ma5_score=ma5_score, reasons=tuple(reasons))
 
 
 def is_ma5_slope_slowdown_excluded(
