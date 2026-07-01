@@ -14,10 +14,11 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_REJECT_ANY,
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_SCORE,
     build_trade_metrics,
     calculate_breakdown_score,
-    calculate_ma5_breakdown_score,
     calculate_range_position_pct,
     calculate_vwap,
     first_threshold_touch,
@@ -25,6 +26,7 @@ from app.domain.vwap_backtest import (
     intraday_range_position_pct,
     is_upper_stall,
     is_ma5_slope_slowdown_excluded,
+    is_ma25_slope_excluded,
     RESISTANCE_FAILURE_REJECT_ALL,
     RESISTANCE_FAILURE_REJECT_APPROACH,
 )
@@ -126,11 +128,6 @@ class BreakdownScoreTest(unittest.TestCase):
         self.assertTrue(is_upper_stall(100.0, 112.0, 90.0, 102.0))
         self.assertFalse(is_upper_stall(100.0, 106.0, 90.0, 104.0))
 
-    def test_ma5_breakdown_score_is_capped_at_three(self):
-        score = calculate_ma5_breakdown_score(-1.0, 1.0, 2.0)
-
-        self.assertEqual(score, 3)
-
     def test_calculates_breakdown_score_reasons(self):
         score = calculate_breakdown_score(
             BreakdownScoreInput(
@@ -145,17 +142,13 @@ class BreakdownScoreTest(unittest.TestCase):
                 low_price=98.0,
                 close_price=99.0,
                 nearest_support_distance_atr=0.8,
-                ma25_slope_pct=0.0,
-                ma5_slope_pct=-1.0,
-                previous_ma5_slope_pct=1.0,
-                three_days_ago_ma5_slope_pct=2.0,
             )
         )
 
-        self.assertEqual(score.total, 11)
-        self.assertEqual(score.ma5_score, 3)
+        self.assertEqual(score.total, 6)
         self.assertIn("VWAP未満", score.reasons)
         self.assertIn("直下支持線が遠い", score.reasons)
+        self.assertNotIn("25日線横ばい以下", score.reasons)
 
 
 class SupportResistanceFilterTest(unittest.TestCase):
@@ -255,6 +248,20 @@ class Ma5SlopeSlowdownTest(unittest.TestCase):
 
     def test_enabled_policy_excludes_when_slope_history_is_missing(self):
         self.assertTrue(is_ma5_slope_slowdown_excluded(None, 1.0, 1.0, MA5_SLOWDOWN_REJECT_ANY))
+
+
+class Ma25SlopePolicyTest(unittest.TestCase):
+    def test_slowdown_policy_excludes_when_current_slope_is_below_five_days_ago(self):
+        self.assertTrue(is_ma25_slope_excluded(0.2, 0.5, MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D))
+        self.assertFalse(is_ma25_slope_excluded(0.5, 0.2, MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D))
+
+    def test_combined_policy_excludes_negative_or_slowdown(self):
+        self.assertTrue(is_ma25_slope_excluded(-0.1, -0.2, MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D))
+        self.assertTrue(is_ma25_slope_excluded(0.2, 0.5, MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D))
+        self.assertFalse(is_ma25_slope_excluded(0.5, 0.2, MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D))
+
+    def test_score_policy_does_not_exclude_immediately(self):
+        self.assertFalse(is_ma25_slope_excluded(-0.1, 0.5, MA25_NEGATIVE_SLOPE_SCORE))
 
 
 class TradeMetricsTest(unittest.TestCase):
@@ -604,7 +611,7 @@ class BacktestUsecaseTest(unittest.TestCase):
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["25日線が下向き"], 1)
 
-    def test_negative_ma25_slope_can_be_counted_in_breakdown_score(self):
+    def test_negative_ma25_slope_score_policy_does_not_add_breakdown_score(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
         signal_date = dates[28]
         entry_date = dates[29]
@@ -642,9 +649,49 @@ class BacktestUsecaseTest(unittest.TestCase):
                 trades, summary = run_vwap_backtest(watchlist, config)
 
         self.assertEqual(len(trades), 1)
-        self.assertGreaterEqual(trades.iloc[0]["breakdown_score"], 2)
-        self.assertIn("25日線横ばい以下", trades.iloc[0]["breakdown_reasons"])
+        self.assertNotIn("breakdown_ma5_score", trades.columns)
+        self.assertNotIn("25日線横ばい以下", trades.iloc[0]["breakdown_reasons"])
         self.assertEqual(summary["ma25_negative_slope_policy"], MA25_NEGATIVE_SLOPE_SCORE)
+
+    def test_rejects_entry_when_ma25_slope_slows_from_five_days_ago(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=80)
+        signal_date = dates[60]
+        entry_date = dates[61]
+        closes = [100.0 + min(i, 56) for i in range(len(dates))]
+        daily = pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [value + 2.0 for value in closes],
+                "Low": [value - 2.0 for value in closes],
+                "Close": closes,
+                "Volume": [1000.0] * len(dates),
+            },
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [157.0], "Low": [155.0], "Close": [156.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -50.0,
+            50.0,
+            "11:00",
+            ma25_negative_slope_policy=MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["25日線傾きが5日前より鈍化"], 1)
+        self.assertEqual(summary["ma25_negative_slope_policy"], MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D)
 
     def test_rejects_entry_when_required_ma5_slope_is_not_positive(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)

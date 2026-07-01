@@ -79,7 +79,7 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         self.assertIn("安値切下げ:3日のうち2回安値切下げ", summary)
         self.assertIn("高値更新考慮なし", summary)
         self.assertIn("5日線上向き", summary)
-        self.assertIn("25日線<0:即除外", summary)
+        self.assertIn("25日線傾き:傾き負を即除外", summary)
         self.assertIn("崩れスコア考慮なし", summary)
         self.assertNotIn("watchlist", summary)
         self.assertNotIn("2026-06", summary)

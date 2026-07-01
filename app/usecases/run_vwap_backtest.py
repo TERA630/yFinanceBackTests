@@ -21,7 +21,10 @@ from app.domain.vwap_backtest import (
     intraday_entry,
     intraday_range_position_pct,
     is_ma5_slope_slowdown_excluded,
+    is_ma25_slope_excluded,
     MA25_NEGATIVE_SLOPE_REJECT,
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     RESISTANCE_FAILURE_REJECT_ALL,
     RESISTANCE_FAILURE_REJECT_APPROACH,
 )
@@ -159,8 +162,23 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["25日線傾きを計算できない"] += 1
                 continue
             ma25_slope_pct = (entry_ma25 / previous_ma25 - 1.0) * 100.0
-            if ma25_slope_pct < 0.0 and config.ma25_negative_slope_policy == MA25_NEGATIVE_SLOPE_REJECT:
-                skipped["25日線が下向き"] += 1
+            five_days_ago_ma25_slope_pct = _ma_slope_pct_at(daily, entry_position - 5, 25)
+            requires_ma25_slowdown = config.ma25_negative_slope_policy in (
+                MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
+                MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
+            )
+            if requires_ma25_slowdown and five_days_ago_ma25_slope_pct is None:
+                skipped["25日線5日前傾きを計算できない"] += 1
+                continue
+            if is_ma25_slope_excluded(
+                ma25_slope_pct,
+                five_days_ago_ma25_slope_pct,
+                config.ma25_negative_slope_policy,
+            ):
+                if config.ma25_negative_slope_policy == MA25_NEGATIVE_SLOPE_REJECT or ma25_slope_pct < 0.0:
+                    skipped["25日線が下向き"] += 1
+                else:
+                    skipped["25日線傾きが5日前より鈍化"] += 1
                 continue
 
             ma5_slope_pct = None
@@ -198,10 +216,6 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     low_price=breakdown_candle.get("low"),
                     close_price=breakdown_candle.get("close"),
                     nearest_support_distance_atr=nearest_support_distance_atr,
-                    ma25_slope_pct=ma25_slope_pct,
-                    ma5_slope_pct=ma5_slope_pct,
-                    previous_ma5_slope_pct=previous_ma5_slope_pct,
-                    three_days_ago_ma5_slope_pct=three_days_ago_ma5_slope_pct,
                 )
             )
             if (
@@ -237,7 +251,6 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "entry_range_position_pct": range_position_pct,
                 "breakdown_volume_ratio_20d": breakdown_volume_ratio_20d,
                 "breakdown_score": breakdown_score.total,
-                "breakdown_ma5_score": breakdown_score.ma5_score,
                 "breakdown_reasons": " / ".join(breakdown_score.reasons),
                 "entry_ma5": entry_ma5,
                 "ma5_slope_pct": ma5_slope_pct,
@@ -246,6 +259,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "entry_ma25": entry_ma25,
                 "entry_dev25_pct": entry_dev25_pct,
                 "ma25_slope_pct": ma25_slope_pct,
+                "five_days_ago_ma25_slope_pct": five_days_ago_ma25_slope_pct,
                 "vwap": vwap,
                 "vwap_margin_pct": None if vwap in (None, 0) else (entry_price / vwap - 1.0) * 100.0,
             }

@@ -36,9 +36,13 @@ RESISTANCE_FAILURE_POLICIES = (
 )
 MA25_NEGATIVE_SLOPE_REJECT = "reject"
 MA25_NEGATIVE_SLOPE_SCORE = "score"
+MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D = "reject_slowdown_5d"
+MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D = "reject_negative_or_slowdown_5d"
 MA25_NEGATIVE_SLOPE_POLICIES = (
     MA25_NEGATIVE_SLOPE_REJECT,
     MA25_NEGATIVE_SLOPE_SCORE,
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
 )
 
 
@@ -84,12 +88,12 @@ class A8BacktestConfig:
         if self.resistance_failure_policy not in RESISTANCE_FAILURE_POLICIES:
             raise ValueError("抵抗線トライ失敗条件は対応する選択肢から指定してください。")
         if self.ma25_negative_slope_policy not in MA25_NEGATIVE_SLOPE_POLICIES:
-            raise ValueError("25日線傾き<0の扱いは対応する選択肢から指定してください。")
+            raise ValueError("25日線傾きの扱いは対応する選択肢から指定してください。")
         if self.breakdown_score_threshold is not None:
             if not isinstance(self.breakdown_score_threshold, int):
                 raise ValueError("崩れスコア除外閾値は整数で指定してください。")
-            if not 0 <= self.breakdown_score_threshold <= 11:
-                raise ValueError("崩れスコア除外閾値は0～11点で指定してください。")
+            if not 0 <= self.breakdown_score_threshold <= 6:
+                raise ValueError("崩れスコア除外閾値は0～6点で指定してください。")
 
 
 # Compatibility alias for callers using the old name.
@@ -120,16 +124,11 @@ class BreakdownScoreInput:
     low_price: Optional[float]
     close_price: Optional[float]
     nearest_support_distance_atr: Optional[float]
-    ma25_slope_pct: Optional[float]
-    ma5_slope_pct: Optional[float]
-    previous_ma5_slope_pct: Optional[float]
-    three_days_ago_ma5_slope_pct: Optional[float]
 
 
 @dataclass(frozen=True)
 class BreakdownScore:
     total: int
-    ma5_score: int
     reasons: tuple[str, ...]
 
 
@@ -214,22 +213,6 @@ def is_upper_stall(
     return upper_wick / day_range >= 0.45 and upper_wick >= body * 1.5
 
 
-def calculate_ma5_breakdown_score(
-    ma5_slope_pct: Optional[float],
-    previous_ma5_slope_pct: Optional[float],
-    three_days_ago_ma5_slope_pct: Optional[float],
-) -> int:
-    score = 0
-    if ma5_slope_pct is not None:
-        if ma5_slope_pct <= 0:
-            score += 2
-        if previous_ma5_slope_pct is not None and ma5_slope_pct < previous_ma5_slope_pct:
-            score += 1
-        if three_days_ago_ma5_slope_pct is not None and ma5_slope_pct < three_days_ago_ma5_slope_pct:
-            score += 1
-    return min(score, 3)
-
-
 def calculate_breakdown_score(inputs: BreakdownScoreInput) -> BreakdownScore:
     score = 0
     reasons: list[str] = []
@@ -267,20 +250,7 @@ def calculate_breakdown_score(inputs: BreakdownScoreInput) -> BreakdownScore:
         score += 1
         reasons.append("直下支持線が遠い")
 
-    if inputs.ma25_slope_pct is not None and inputs.ma25_slope_pct <= 0:
-        score += 2
-        reasons.append("25日線横ばい以下")
-
-    ma5_score = calculate_ma5_breakdown_score(
-        inputs.ma5_slope_pct,
-        inputs.previous_ma5_slope_pct,
-        inputs.three_days_ago_ma5_slope_pct,
-    )
-    if ma5_score > 0:
-        score += ma5_score
-        reasons.append(f"5日線スコア{ma5_score}点")
-
-    return BreakdownScore(total=score, ma5_score=ma5_score, reasons=tuple(reasons))
+    return BreakdownScore(total=score, reasons=tuple(reasons))
 
 
 def is_ma5_slope_slowdown_excluded(
@@ -305,6 +275,34 @@ def is_ma5_slope_slowdown_excluded(
     if policy == MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY:
         return slower_than_three_days_ago
     raise ValueError(f"未対応の5日線傾き鈍化条件です: {policy}")
+
+
+def is_ma25_slope_excluded(
+    current_slope_pct: Optional[float],
+    five_days_ago_slope_pct: Optional[float],
+    policy: str,
+) -> bool:
+    if policy == MA25_NEGATIVE_SLOPE_SCORE:
+        return False
+    if current_slope_pct is None:
+        return True
+
+    is_negative = current_slope_pct < 0.0
+    if policy == MA25_NEGATIVE_SLOPE_REJECT:
+        return is_negative
+
+    if policy in (
+        MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
+        MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
+    ):
+        if five_days_ago_slope_pct is None:
+            return True
+        is_slowdown = current_slope_pct < five_days_ago_slope_pct
+        if policy == MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D:
+            return is_slowdown
+        return is_negative or is_slowdown
+
+    raise ValueError(f"未対応の25日線傾き条件です: {policy}")
 
 
 def intraday_range_position_pct(

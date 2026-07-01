@@ -25,6 +25,8 @@ from app.domain.vwap_backtest import (
     ENTRY_1400,
     ENTRY_PREV_CLOSE,
     MA25_NEGATIVE_SLOPE_REJECT,
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_SCORE,
     MA5_SLOWDOWN_ALLOW_ONE,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
@@ -60,17 +62,18 @@ LOWER_LOW_LABELS = {
 }
 LOWER_LOW_VALUES = {label: value for value, label in LOWER_LOW_LABELS.items()}
 MA25_NEGATIVE_SLOPE_LABELS = {
-    MA25_NEGATIVE_SLOPE_REJECT: "即除外",
-    MA25_NEGATIVE_SLOPE_SCORE: "崩れスコアに加点",
+    MA25_NEGATIVE_SLOPE_REJECT: "傾き負を即除外",
+    MA25_NEGATIVE_SLOPE_SCORE: "即除外しない",
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D: "5日前より傾き鈍化除外",
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D: "傾き鈍化、傾き負いずれも除外",
 }
 MA25_NEGATIVE_SLOPE_VALUES = {label: value for value, label in MA25_NEGATIVE_SLOPE_LABELS.items()}
 BREAKDOWN_SCORE_VALUES = {
     "考慮しない": None,
+    "3点以上": 3,
     "4点以上": 4,
     "5点以上": 5,
     "6点以上": 6,
-    "7点以上": 7,
-    "8点以上": 8,
 }
 
 
@@ -104,7 +107,7 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
     ma5_slowdown_label = MA5_SLOWDOWN_LABELS.get(config.ma5_slope_slowdown_policy, "考慮しない")
     support_label = "支持線反発を確認" if config.require_support_rebound else "支持線反発を確認しない"
     resistance_label = RESISTANCE_FAILURE_LABELS.get(config.resistance_failure_policy, "考慮しない")
-    ma25_slope_label = MA25_NEGATIVE_SLOPE_LABELS.get(config.ma25_negative_slope_policy, "即除外")
+    ma25_slope_label = MA25_NEGATIVE_SLOPE_LABELS.get(config.ma25_negative_slope_policy, "傾き負を即除外")
     breakdown_label = (
         "崩れスコア考慮なし"
         if config.breakdown_score_threshold is None
@@ -113,7 +116,7 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
         f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
-        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線<0:{ma25_slope_label} / "
+        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
         f"{breakdown_label} / {support_label} / 抵抗線:{resistance_label}"
     )
 
@@ -252,13 +255,13 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=30,
     ).grid(row=4, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="25日線傾き<0").grid(row=5, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(exclusion_frame, text="25日線傾き").grid(row=5, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
         exclusion_frame,
         textvariable=ma25_negative_slope_var,
         values=tuple(MA25_NEGATIVE_SLOPE_VALUES.keys()),
         state="readonly",
-        width=18,
+        width=32,
     ).grid(row=5, column=1, sticky="w", padx=10, pady=6)
 
     score_frame = ttk.LabelFrame(frame, text="崩れスコア")

@@ -11,6 +11,8 @@ from app.domain.vwap_backtest import (
     EXCURSION_WINDOWS,
     HORIZONS,
     MA25_NEGATIVE_SLOPE_REJECT,
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_SCORE,
     MA5_SLOWDOWN_ALLOW_ONE,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
@@ -36,8 +38,10 @@ RESISTANCE_FAILURE_LABELS = {
     RESISTANCE_FAILURE_REJECT_ALL: "接近失速・だまし突破の両方を除外",
 }
 MA25_NEGATIVE_SLOPE_LABELS = {
-    MA25_NEGATIVE_SLOPE_REJECT: "即除外",
-    MA25_NEGATIVE_SLOPE_SCORE: "崩れスコアに加点",
+    MA25_NEGATIVE_SLOPE_REJECT: "傾き負を即除外",
+    MA25_NEGATIVE_SLOPE_SCORE: "即除外しない",
+    MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D: "5日前より傾き鈍化除外",
+    MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D: "傾き鈍化、傾き負いずれも除外",
 }
 
 
@@ -149,7 +153,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- エントリー時刻: {_entry_label(row['entry_time'])}",
             f"- 買値: {_price(row['entry_price'])}",
             f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
-            f"- 崩れスコア: {_score(row.get('breakdown_score'))}（5日線: {_score(row.get('breakdown_ma5_score'))}）",
+            f"- 崩れスコア: {_score(row.get('breakdown_score'))}",
             f"- 崩れ理由: {_text_or_na(row.get('breakdown_reasons'))}",
             f"- 出来高20日平均比: {_ratio(row.get('breakdown_volume_ratio_20d'))}",
             f"- 直下支持線距離: {_atr_distance(row.get('nearest_support_distance_atr'))}",
@@ -160,6 +164,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 当日暫定MA25: {_price(row['entry_ma25'])}",
             f"- 当日25日乖離率: {_percent(row['entry_dev25_pct'])}",
             f"- 25日線傾き: {_percent(row['ma25_slope_pct'])}",
+            f"- 5営業日前25日線傾き: {_percent(row.get('five_days_ago_ma25_slope_pct'))}",
             f"- 参考VWAP: {_price(row['vwap'])}",
             f"- VWAP上方率（参考）: {_percent(row['vwap_margin_pct'])}",
             "",
@@ -192,7 +197,7 @@ def _condition_lines(summary: dict) -> list[str]:
     return [
         f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
-        f"- 25日線傾き<0: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
+        f"- 25日線傾き: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
         f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
         f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
         f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
