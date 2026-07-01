@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Compatibility entry point for the former A9r3 backtest."""
+"""Official entry point for the A9r4 backtest."""
 
 from app.a9r4_main import main
 

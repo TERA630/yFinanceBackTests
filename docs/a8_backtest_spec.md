@@ -1,12 +1,12 @@
-# A9r3統合バックテスト
+# A9r4統合バックテスト
 
 ## 正式な起動方法
 
 ```powershell
-python backtest_a9r3.py
+python backtest_a9r4.py
 ```
 
-正式入口は `backtest_a9r3.py` とする。
+正式入口は `backtest_a9r4.py` とする。
 
 一度選択した監視銘柄ファイルは `.a8_settings.json` に記憶する。次回起動時にファイルが存在すれば自動入力し、存在しない、または設定を読み込めない場合はファイル選択画面を表示する。
 
@@ -86,4 +86,4 @@ python backtest_a9r3.py
 
 副項目として翌日、5日後、10日後、15日後の勝率を出力する。サマリでは合計損益を出力しない。
 
-出力ファイル名は `bt_v9r3_*_summary-*` と `bt_v9r3_*_result-*` とする。
+出力ファイル名は `bt_v9r4_*_summary-*` と `bt_v9r4_*_result-*` とする。

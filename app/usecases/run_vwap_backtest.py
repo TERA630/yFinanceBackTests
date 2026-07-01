@@ -40,7 +40,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     print("[2/3] 5分足データ取得")
     intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
-    print("[3/3] A9r3バックテスト")
+    print("[3/3] A9r4バックテスト")
 
     records: List[dict] = []
     skipped = Counter()

@@ -3,7 +3,7 @@
 
 """Compatibility entry point for the former integrated A8 backtest."""
 
-from app.a9r2_main import main
+from app.a9r4_main import main
 
 
 if __name__ == "__main__":

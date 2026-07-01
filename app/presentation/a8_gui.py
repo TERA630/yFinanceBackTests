@@ -1,4 +1,4 @@
-"""Single-window input form for the A9r3 backtest."""
+"""Single-window input form for the A9r4 backtest."""
 
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
 
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
-    win.title("A9r3 バックテスト条件設定")
+    win.title("A9r4 バックテスト条件設定")
     win.geometry("720x930")
     win.resizable(False, False)
 
@@ -409,7 +409,7 @@ def show_a8_completion(summary_path: Path, result_path: Path) -> None:
         return
     root = tk.Tk()
     root.withdraw()
-    messagebox.showinfo("完了", f"A9r3バックテストが完了しました。\n\n{summary_path}\n{result_path}")
+    messagebox.showinfo("完了", f"A9r4バックテストが完了しました。\n\n{summary_path}\n{result_path}")
     root.destroy()
 
 
@@ -421,7 +421,7 @@ def show_a8_batch_completion(
         return
     root = tk.Tk()
     root.withdraw()
-    lines = [f"A9r3バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"]
+    lines = [f"A9r4バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"]
     for index, (summary_path, result_path) in enumerate(outputs, start=1):
         lines.append("")
         lines.append(f"[成功 {index}]")

@@ -45,7 +45,7 @@ MA25_NEGATIVE_SLOPE_LABELS = {
 }
 
 
-def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
+def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     report_date = datetime.now().strftime("%m-%d")
     summary_path, result_path = _report_paths(out_dir, summary, report_date)
@@ -54,22 +54,27 @@ def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tup
     return summary_path, result_path
 
 
+def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
+    """Compatibility alias for callers using the old A9r2 report name."""
+    return save_a9r4_reports(out_dir, trades, summary)
+
+
 def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for callers using the former A8 report name."""
-    return save_a9r2_reports(out_dir, trades, summary)
+    return save_a9r4_reports(out_dir, trades, summary)
 
 
 def save_vwap_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for the former VWAP report writer."""
-    return save_a9r2_reports(out_dir, trades, summary)
+    return save_a9r4_reports(out_dir, trades, summary)
 
 
 def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path, Path]:
     condition = _filename_condition(summary)
     index = 1
     while True:
-        summary_path = out_dir / f"bt_v9r3_{condition}-{report_date}_summary-{index}.md"
-        result_path = out_dir / f"bt_v9r3_{condition}-{report_date}_result-{index}.md"
+        summary_path = out_dir / f"bt_v9r4_{condition}-{report_date}_summary-{index}.md"
+        result_path = out_dir / f"bt_v9r4_{condition}-{report_date}_result-{index}.md"
         if not summary_path.exists() and not result_path.exists():
             return summary_path, result_path
         index += 1
@@ -77,7 +82,7 @@ def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path,
 
 def _summary_markdown(summary: dict) -> str:
     lines = [
-        "# A9r3バックテスト サマリー",
+        "# A9r4バックテスト サマリー",
         "",
         "## 実行条件",
         "",
@@ -123,7 +128,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
     entry_only_count = _entry_only_count(trades)
     completed_trades = _completed_result_trades(trades)
     lines = [
-        "# A9r3バックテスト 個別結果",
+        "# A9r4バックテスト 個別結果",
         "",
         "## 実行条件",
         "",

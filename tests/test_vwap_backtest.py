@@ -374,7 +374,7 @@ class SummaryTest(unittest.TestCase):
         config = VwapBacktestConfig("2026-06-01", "2026-06-10", -5.0, 5.0, "11:00")
         summary = build_summary(trades, config, stock_count=1, evaluated=1, skipped={})
         markdown = _summary_markdown(summary)
-        self.assertIn("# A9r3バックテスト サマリー", markdown)
+        self.assertIn("# A9r4バックテスト サマリー", markdown)
         self.assertIn("| 5営業日 | 100.00% | 100.00% | 6.00% | -3.50% | 100.00% | 0.00% |", markdown)
         self.assertIn("| 10営業日後 | 1 | 100.00% |", markdown)
         self.assertIn("- VWAP: 単独除外なし（崩れスコアで判定）", markdown)
@@ -391,10 +391,10 @@ class SummaryTest(unittest.TestCase):
             first_result.write_text("", encoding="utf-8")
             second_summary, second_result = _report_paths(out_dir, summary, "06-17")
 
-        self.assertEqual(first_summary.name, "bt_v9r3_ME25(-1,2)-06-17_summary-1.md")
-        self.assertEqual(first_result.name, "bt_v9r3_ME25(-1,2)-06-17_result-1.md")
-        self.assertEqual(second_summary.name, "bt_v9r3_ME25(-1,2)-06-17_summary-2.md")
-        self.assertEqual(second_result.name, "bt_v9r3_ME25(-1,2)-06-17_result-2.md")
+        self.assertEqual(first_summary.name, "bt_v9r4_ME25(-1,2)-06-17_summary-1.md")
+        self.assertEqual(first_result.name, "bt_v9r4_ME25(-1,2)-06-17_result-1.md")
+        self.assertEqual(second_summary.name, "bt_v9r4_ME25(-1,2)-06-17_summary-2.md")
+        self.assertEqual(second_result.name, "bt_v9r4_ME25(-1,2)-06-17_result-2.md")
 
     def test_result_markdown_shows_conditions_and_hides_entry_only_rows(self):
         trades = pd.DataFrame(
