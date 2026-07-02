@@ -204,6 +204,8 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
         f"- 25日線傾き: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
         f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
+        f"- 日経先物8時フィルタ: {_nikkei_filter_condition(summary)}",
+        f"- SOX半導体フィルタ: {_sox_filter_condition(summary)}",
         f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
         f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
         "- VWAP: 単独除外なし（崩れスコアで判定）",
@@ -272,6 +274,18 @@ def _ma25_negative_slope_label(value) -> str:
 
 def _breakdown_score_condition(value) -> str:
     return "考慮しない" if value is None or pd.isna(value) else f"{int(value)}点以上を除外"
+
+
+def _nikkei_filter_condition(summary: dict) -> str:
+    if not summary.get("use_nikkei_futures_filter"):
+        return "考慮しない"
+    return f"11:00/14:00のみ、{summary.get('nikkei_futures_symbol', 'NIY=F')}が8時時点で前日比下落なら除外"
+
+
+def _sox_filter_condition(summary: dict) -> str:
+    if not summary.get("use_sox_semiconductor_filter"):
+        return "考慮しない"
+    return f"{summary.get('sox_symbol', '^SOX')}前日終値が下落なら、半導体・AIインフラ銘柄を除外"
 
 
 def _support_rebound(row: pd.Series) -> str:

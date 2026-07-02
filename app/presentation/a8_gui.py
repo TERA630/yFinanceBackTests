@@ -113,11 +113,13 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         if config.breakdown_score_threshold is None
         else f"崩れスコア{config.breakdown_score_threshold}点以上除外"
     )
+    nikkei_label = "日経先物8時下落除外" if config.use_nikkei_futures_filter else "日経先物考慮なし"
+    sox_label = "SOX下落時半導体除外" if config.use_sox_semiconductor_filter else "SOX考慮なし"
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
         f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
         f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
-        f"{breakdown_label} / {support_label} / 抵抗線:{resistance_label}"
+        f"{breakdown_label} / {nikkei_label} / {sox_label} / {support_label} / 抵抗線:{resistance_label}"
     )
 
 
@@ -135,7 +137,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A9r4 バックテスト条件設定")
-    win.geometry("720x930")
+    win.geometry("720x980")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -155,6 +157,8 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     resistance_failure_var = tk.StringVar(value=RESISTANCE_FAILURE_LABELS[RESISTANCE_FAILURE_IGNORE])
     ma25_negative_slope_var = tk.StringVar(value=MA25_NEGATIVE_SLOPE_LABELS[MA25_NEGATIVE_SLOPE_REJECT])
     breakdown_score_var = tk.StringVar(value="5点以上")
+    use_nikkei_futures_filter_var = tk.BooleanVar(value=True)
+    use_sox_semiconductor_filter_var = tk.BooleanVar(value=True)
     default_start, default_end = default_date_range()
 
     ttk.Label(frame, text="開始日").grid(row=0, column=0, sticky="w", pady=6)
@@ -277,20 +281,36 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=18,
     ).grid(row=0, column=1, sticky="w", padx=10, pady=6)
 
+    market_frame = ttk.LabelFrame(frame, text="市場フィルタ")
+    market_frame.grid(row=9, column=0, columnspan=3, sticky="ew", pady=6)
+    market_frame.columnconfigure(1, weight=1)
+
+    ttk.Checkbutton(
+        market_frame,
+        text="日経先物が8時時点で前日比下落なら除外（11:00/14:00のみ）",
+        variable=use_nikkei_futures_filter_var,
+    ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=6)
+
+    ttk.Checkbutton(
+        market_frame,
+        text="SOX前日終値が下落なら、半導体・AIインフラ銘柄を除外",
+        variable=use_sox_semiconductor_filter_var,
+    ).grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=6)
+
     ttk.Checkbutton(
         frame,
         text="支持線反発を確認する",
         variable=require_support_rebound_var,
-    ).grid(row=9, column=0, columnspan=2, sticky="w", pady=6)
+    ).grid(row=10, column=0, columnspan=2, sticky="w", pady=6)
 
-    ttk.Label(frame, text="抵抗線トライ失敗").grid(row=10, column=0, sticky="w", pady=6)
+    ttk.Label(frame, text="抵抗線トライ失敗").grid(row=11, column=0, sticky="w", pady=6)
     ttk.Combobox(
         frame,
         textvariable=resistance_failure_var,
         values=tuple(RESISTANCE_FAILURE_VALUES.keys()),
         state="readonly",
         width=30,
-    ).grid(row=10, column=1, sticky="w")
+    ).grid(row=11, column=1, sticky="w")
 
     help_var = tk.StringVar()
     help_label = ttk.Label(
@@ -298,7 +318,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         textvariable=help_var,
         foreground="#555555",
     )
-    help_label.grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 16))
+    help_label.grid(row=12, column=0, columnspan=3, sticky="w", pady=(10, 16))
     help_var.set(
         "VWAPは単独除外せず、崩れスコアの材料として判定します。\n"
         "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
@@ -307,16 +327,16 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
-    ttk.Label(frame, text="保存済み条件").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+    ttk.Label(frame, text="保存済み条件").grid(row=13, column=0, sticky="nw", pady=(8, 4))
     queue_frame = ttk.Frame(frame)
-    queue_frame.grid(row=12, column=1, columnspan=2, sticky="w", pady=(8, 4))
+    queue_frame.grid(row=13, column=1, columnspan=2, sticky="w", pady=(8, 4))
     queue_list = tk.Listbox(queue_frame, width=78, height=5)
     queue_xscroll = ttk.Scrollbar(queue_frame, orient=tk.HORIZONTAL, command=queue_list.xview)
     queue_list.configure(xscrollcommand=queue_xscroll.set)
     queue_list.grid(row=0, column=0, sticky="w")
     queue_xscroll.grid(row=1, column=0, sticky="ew")
     ttk.Label(frame, textvariable=saved_count_var, foreground="#555555").grid(
-        row=13, column=1, columnspan=2, sticky="w", pady=(0, 8)
+        row=14, column=1, columnspan=2, sticky="w", pady=(0, 8)
     )
 
     def refresh_queue_list() -> None:
@@ -356,6 +376,8 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             resistance_failure_policy=RESISTANCE_FAILURE_VALUES[resistance_failure_var.get()],
             ma25_negative_slope_policy=MA25_NEGATIVE_SLOPE_VALUES[ma25_negative_slope_var.get()],
             breakdown_score_threshold=BREAKDOWN_SCORE_VALUES[breakdown_score_var.get()],
+            use_nikkei_futures_filter=use_nikkei_futures_filter_var.get(),
+            use_sox_semiconductor_filter=use_sox_semiconductor_filter_var.get(),
         )
         config.validate()
         oldest = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
@@ -392,7 +414,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         win.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=14, column=0, columnspan=3, pady=8)
+    buttons.grid(row=15, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)

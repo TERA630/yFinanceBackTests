@@ -44,6 +44,8 @@ MA25_NEGATIVE_SLOPE_POLICIES = (
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
 )
+DEFAULT_NIKKEI_FUTURES_SYMBOL = "NIY=F"
+DEFAULT_SOX_SYMBOL = "^SOX"
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,10 @@ class A8BacktestConfig:
     resistance_failure_policy: str = RESISTANCE_FAILURE_IGNORE
     ma25_negative_slope_policy: str = MA25_NEGATIVE_SLOPE_REJECT
     breakdown_score_threshold: Optional[int] = None
+    use_nikkei_futures_filter: bool = False
+    use_sox_semiconductor_filter: bool = False
+    nikkei_futures_symbol: str = DEFAULT_NIKKEI_FUTURES_SYMBOL
+    sox_symbol: str = DEFAULT_SOX_SYMBOL
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -94,6 +100,14 @@ class A8BacktestConfig:
                 raise ValueError("崩れスコア除外閾値は整数で指定してください。")
             if not 0 <= self.breakdown_score_threshold <= 6:
                 raise ValueError("崩れスコア除外閾値は0～6点で指定してください。")
+        if not isinstance(self.use_nikkei_futures_filter, bool):
+            raise ValueError("日経先物8時フィルタは有効または無効で指定してください。")
+        if not isinstance(self.use_sox_semiconductor_filter, bool):
+            raise ValueError("SOX半導体フィルタは有効または無効で指定してください。")
+        if not str(self.nikkei_futures_symbol).strip():
+            raise ValueError("日経先物シンボルを指定してください。")
+        if not str(self.sox_symbol).strip():
+            raise ValueError("SOXシンボルを指定してください。")
 
 
 # Compatibility alias for callers using the old name.

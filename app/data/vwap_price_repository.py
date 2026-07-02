@@ -28,6 +28,20 @@ def fetch_intraday_prices(watchlist: List[Tuple[str, str]], start_date: str, end
     return _download_map(watchlist, start, end, "5m")
 
 
+def fetch_symbol_daily_price(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    start = (pd.Timestamp(start_date) - pd.Timedelta(days=14)).strftime("%Y-%m-%d")
+    end = (pd.Timestamp(end_date) + pd.Timedelta(days=4)).strftime("%Y-%m-%d")
+    return _download_symbol(symbol, start, end, "1d")
+
+
+def fetch_symbol_intraday_price(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    cutoff = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
+    requested_start = pd.Timestamp(start_date) - pd.Timedelta(days=7)
+    start = max(cutoff, requested_start).strftime("%Y-%m-%d")
+    end = min(pd.Timestamp.now().normalize() + pd.Timedelta(days=1), pd.Timestamp(end_date) + pd.Timedelta(days=4)).strftime("%Y-%m-%d")
+    return _download_symbol(symbol, start, end, "5m")
+
+
 def _download_map(
     watchlist: List[Tuple[str, str]], start: str, end: str, interval: str
 ) -> Dict[str, pd.DataFrame]:
@@ -63,6 +77,26 @@ def _download_map(
     return result
 
 
+def _download_symbol(symbol: str, start: str, end: str, interval: str) -> pd.DataFrame:
+    cache_path = _symbol_cache_path(symbol, start, end, interval)
+    cached = _read_single_cache(cache_path)
+    if cached is not None:
+        return cached
+
+    data = yf.download(
+        tickers=symbol,
+        start=start,
+        end=end,
+        interval=interval,
+        auto_adjust=True,
+        progress=False,
+        threads=False,
+    )
+    result = pd.DataFrame() if data is None or data.empty else _normalize(data.copy(), interval)
+    _write_single_cache(cache_path, result)
+    return result
+
+
 def _normalize(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     df.columns = [str(column).title() for column in df.columns]
     index = pd.DatetimeIndex(pd.to_datetime(df.index))
@@ -80,6 +114,13 @@ def _cache_path(watchlist: List[Tuple[str, str]], start: str, end: str, interval
     return CACHE_DIR / f"{interval}_{start_label}_{end_label}_{digest}.pkl"
 
 
+def _symbol_cache_path(symbol: str, start: str, end: str, interval: str) -> Path:
+    digest = hashlib.sha1(symbol.encode("utf-8")).hexdigest()[:8]
+    start_label = pd.Timestamp(start).strftime("%Y%m%d")
+    end_label = pd.Timestamp(end).strftime("%Y%m%d")
+    return CACHE_DIR / f"symbol_{interval}_{start_label}_{end_label}_{digest}.pkl"
+
+
 def _read_cache(path: Path) -> Dict[str, pd.DataFrame] | None:
     try:
         if not path.exists():
@@ -91,7 +132,27 @@ def _read_cache(path: Path) -> Dict[str, pd.DataFrame] | None:
     return value if isinstance(value, dict) else None
 
 
+def _read_single_cache(path: Path) -> pd.DataFrame | None:
+    try:
+        if not path.exists():
+            return None
+        with path.open("rb") as file:
+            value = pickle.load(file)
+    except (OSError, pickle.PickleError, EOFError):
+        return None
+    return value if isinstance(value, pd.DataFrame) else None
+
+
 def _write_cache(path: Path, value: Dict[str, pd.DataFrame]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as file:
+            pickle.dump(value, file)
+    except OSError:
+        return
+
+
+def _write_single_cache(path: Path, value: pd.DataFrame) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as file:

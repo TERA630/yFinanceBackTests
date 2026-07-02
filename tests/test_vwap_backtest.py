@@ -32,6 +32,7 @@ from app.domain.vwap_backtest import (
 )
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
 from app.usecases.run_vwap_backtest import _higher_high_count, _lower_low_count, build_summary, run_vwap_backtest
+from app.usecases.watchlist import parse_watchlist_items
 from app.domain.vwap_backtest import VwapBacktestConfig
 
 
@@ -262,6 +263,100 @@ class Ma25SlopePolicyTest(unittest.TestCase):
 
     def test_score_policy_does_not_exclude_immediately(self):
         self.assertFalse(is_ma25_slope_excluded(-0.1, 0.5, MA25_NEGATIVE_SLOPE_SCORE))
+
+
+class WatchlistTagTest(unittest.TestCase):
+    def test_semiconductor_related_flag_uses_keywords_on_same_line(self):
+        items = parse_watchlist_items(
+            "- 対象銘柄 (1234) 半導体\n"
+            "- 対象外銘柄 (5678)\n"
+            "AIインフラ\n"
+            "- AI銘柄 (9999) AIインフラ\n"
+        )
+
+        self.assertTrue(items[0].is_semiconductor_related)
+        self.assertFalse(items[1].is_semiconductor_related)
+        self.assertTrue(items[2].is_semiconductor_related)
+
+
+class MarketFilterTest(unittest.TestCase):
+    def _daily_and_intraday(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        entry_date = dates[29]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 102.0, "Low": 98.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        intraday = pd.DataFrame(
+            {"High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [100.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 10:55"]),
+        )
+        return dates, signal_date, entry_date, daily, intraday
+
+    def test_nikkei_futures_filter_rejects_1100_entry_when_0800_is_down(self):
+        _, signal_date, entry_date, daily, intraday = self._daily_and_intraday()
+        nikkei_daily = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime([signal_date]))
+        nikkei_intraday = pd.DataFrame(
+            {"Close": [99.0]},
+            index=pd.to_datetime([f"{entry_date.date()} 08:00"]),
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            use_nikkei_futures_filter=True,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
+            ), patch(
+                "app.usecases.run_vwap_backtest.fetch_symbol_daily_price", return_value=nikkei_daily
+            ), patch(
+                "app.usecases.run_vwap_backtest.fetch_symbol_intraday_price", return_value=nikkei_intraday
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["日経先物8時下落"], 1)
+        self.assertTrue(summary["use_nikkei_futures_filter"])
+
+    def test_sox_filter_rejects_tagged_semiconductor_related_stock_only(self):
+        dates, signal_date, entry_date, daily, intraday = self._daily_and_intraday()
+        sox_daily = pd.DataFrame({"Close": [100.0, 99.0]}, index=pd.to_datetime([dates[27], signal_date]))
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "11:00",
+            use_sox_semiconductor_filter=True,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- 半導体銘柄 (1234) 半導体\n- 通常銘柄 (5678)\n", encoding="utf-8")
+            with patch(
+                "app.usecases.run_vwap_backtest.fetch_daily_prices",
+                return_value={"1234": daily, "5678": daily},
+            ), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices",
+                return_value={"1234": intraday, "5678": intraday},
+            ), patch(
+                "app.usecases.run_vwap_backtest.fetch_symbol_daily_price", return_value=sox_daily
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["code"], "5678")
+        self.assertFalse(trades.iloc[0]["semiconductor_related"])
+        self.assertEqual(summary["skipped"]["SOX下落かつ半導体関連"], 1)
+        self.assertTrue(summary["use_sox_semiconductor_filter"])
 
 
 class TradeMetricsTest(unittest.TestCase):
