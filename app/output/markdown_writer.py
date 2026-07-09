@@ -54,6 +54,18 @@ def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tup
     return summary_path, result_path
 
 
+def save_market_filter_diagnostics(out_dir: Path, diagnostics: dict) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    index = 1
+    while True:
+        path = out_dir / f"market_filter_diagnostics_{timestamp}-{index}.md"
+        if not path.exists():
+            path.write_text(_market_filter_diagnostics_markdown(diagnostics), encoding="utf-8")
+            return path
+        index += 1
+
+
 def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for callers using the old A9r2 report name."""
     return save_a9r4_reports(out_dir, trades, summary)
@@ -121,6 +133,66 @@ def _summary_markdown(summary: dict) -> str:
     else:
         lines.append("- なし")
     lines.extend(["", "※ 手数料、税金、スリッページ、配当は考慮していません。", ""])
+    return "\n".join(lines)
+
+
+def _market_filter_diagnostics_markdown(diagnostics: dict) -> str:
+    nikkei = diagnostics.get("nikkei", {})
+    sox = diagnostics.get("sox", {})
+    lines = [
+        "# 市場フィルタ データ検証",
+        "",
+        "## 実行条件",
+        "",
+        f"- 生成日時: {diagnostics.get('generated_at', 'N/A')}",
+        f"- 判定期間: {diagnostics.get('start_date', 'N/A')} ～ {diagnostics.get('end_date', 'N/A')}",
+        f"- エントリー時刻: {_entry_label(diagnostics.get('entry_time', ''))}",
+        f"- キャッシュ: {'無視して再取得' if diagnostics.get('ignore_cache') else '利用'}",
+        f"- 監視銘柄数: {diagnostics.get('watchlist_count', 0)}",
+        f"- 半導体・AIインフラ銘柄数: {diagnostics.get('semiconductor_related_count', 0)}",
+        f"- 診断対象営業日数: {diagnostics.get('signal_date_count', 0)}",
+        "",
+        "## 日経先物",
+        "",
+        f"- フィルタ状態: {'有効' if nikkei.get('enabled') else '無効または前日終値エントリーのため未使用'}",
+        f"- シンボル: {nikkei.get('symbol', 'N/A')}",
+        "",
+        *_download_lines("日足", nikkei.get("daily", {})),
+        "",
+        *_download_lines("5分足", nikkei.get("intraday", {})),
+        "",
+        "### 日付別判定",
+        "",
+        "| エントリー日 | 前日終値 | 8時時点 | 状態 |",
+        "|---:|---:|---:|---|",
+    ]
+    for row in nikkei.get("dates", []):
+        lines.append(
+            f"| {row.get('date', 'N/A')} | {_plain_number(row.get('previous_close'))} | "
+            f"{_plain_number(row.get('close_at_or_before_0800'))} | {row.get('status', 'N/A')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## SOX",
+            "",
+            f"- フィルタ状態: {'有効' if sox.get('enabled') else '無効'}",
+            f"- シンボル: {sox.get('symbol', 'N/A')}",
+            "",
+            *_download_lines("日足", sox.get("daily", {})),
+            "",
+            "### 日付別判定",
+            "",
+            "| エントリー日 | 比較前終値 | 最新終値 | 状態 |",
+            "|---:|---:|---:|---|",
+        ]
+    )
+    for row in sox.get("dates", []):
+        lines.append(
+            f"| {row.get('date', 'N/A')} | {_plain_number(row.get('previous_close'))} | "
+            f"{_plain_number(row.get('latest_close'))} | {row.get('status', 'N/A')} |"
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -288,6 +360,24 @@ def _sox_filter_condition(summary: dict) -> str:
     return f"{summary.get('sox_symbol', '^SOX')}前日終値が下落なら、半導体・AIインフラ銘柄を除外"
 
 
+def _download_lines(label: str, metadata: dict) -> list[str]:
+    columns = metadata.get("columns") or ()
+    column_label = ", ".join(str(column) for column in columns) if columns else "N/A"
+    return [
+        f"### {label}取得",
+        "",
+        f"- 取得範囲: {metadata.get('start', 'N/A')} ～ {metadata.get('end', 'N/A')}",
+        f"- 行数: {metadata.get('row_count', 0)}",
+        f"- 先頭時刻: {metadata.get('first_timestamp') or 'N/A'}",
+        f"- 末尾時刻: {metadata.get('last_timestamp') or 'N/A'}",
+        f"- 列: {column_label}",
+        f"- キャッシュパス: {metadata.get('cache_path', 'N/A')}",
+        f"- キャッシュ存在: {'あり' if metadata.get('cache_exists') else 'なし'}",
+        f"- キャッシュヒット: {'あり' if metadata.get('cache_hit') else 'なし'}",
+        f"- エラー: {metadata.get('error') or 'なし'}",
+    ]
+
+
 def _support_rebound(row: pd.Series) -> str:
     if not row.get("support_rebound", False):
         return "なし"
@@ -308,6 +398,10 @@ def _first_touch(value) -> str:
 
 def _price(value) -> str:
     return "N/A" if value is None or pd.isna(value) else f"{float(value):,.2f}円"
+
+
+def _plain_number(value) -> str:
+    return "N/A" if value is None or pd.isna(value) else f"{float(value):,.2f}"
 
 
 def _percent(value) -> str:

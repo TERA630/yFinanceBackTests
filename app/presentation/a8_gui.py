@@ -82,6 +82,8 @@ class A8GuiInput:
     stock_file: Path
     output_dir: Path
     config: A8BacktestConfig
+    action: str = "backtest"
+    ignore_market_cache: bool = False
 
 
 def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit: int = 5) -> None:
@@ -137,7 +139,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A9r4 バックテスト条件設定")
-    win.geometry("720x980")
+    win.geometry("840x980")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -413,11 +415,28 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         result["value"] = list(saved_queue)
         win.destroy()
 
+    def diagnose_market_data() -> None:
+        try:
+            gui_input = build_input_from_form()
+            result["value"] = [
+                A8GuiInput(
+                    gui_input.stock_file,
+                    gui_input.output_dir,
+                    gui_input.config,
+                    action="market_diagnostics",
+                    ignore_market_cache=True,
+                )
+            ]
+            win.destroy()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("入力エラー", str(exc))
+
     buttons = ttk.Frame(frame)
     buttons.grid(row=15, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
     ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)
+    ttk.Button(buttons, text="市場データ検証", width=14, command=diagnose_market_data).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="キュークリア", width=14, command=clear_conditions).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="キャンセル", width=14, command=win.destroy).pack(side=tk.LEFT, padx=8)
     if remembered_watchlist is None:
@@ -438,17 +457,25 @@ def show_a8_completion(summary_path: Path, result_path: Path) -> None:
 def show_a8_batch_completion(
     outputs: Sequence[tuple[Path, Path]],
     errors: Sequence[tuple[A8GuiInput, Exception]],
+    diagnostics_outputs: Sequence[Path] = (),
 ) -> None:
     if tk is None or messagebox is None:
         return
     root = tk.Tk()
     root.withdraw()
-    lines = [f"A9r4バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"]
+    lines = [
+        f"A9r4バックテストが完了しました。成功: {len(outputs)}件 / "
+        f"市場データ検証: {len(diagnostics_outputs)}件 / エラー: {len(errors)}件"
+    ]
     for index, (summary_path, result_path) in enumerate(outputs, start=1):
         lines.append("")
         lines.append(f"[成功 {index}]")
         lines.append(str(summary_path))
         lines.append(str(result_path))
+    for index, diagnostics_path in enumerate(diagnostics_outputs, start=1):
+        lines.append("")
+        lines.append(f"[市場データ検証 {index}]")
+        lines.append(str(diagnostics_path))
     for index, (gui_input, exc) in enumerate(errors, start=1):
         lines.append("")
         lines.append(f"[エラー {index}] {summarize_condition(gui_input)}")
