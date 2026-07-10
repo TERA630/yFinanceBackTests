@@ -289,7 +289,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
 
     ttk.Checkbutton(
         market_frame,
-        text="日経先物が8時時点で前日比下落なら除外（11:00/14:00のみ）",
+        text="日経先物の8時直前値が前営業日15:30直前値より下落なら除外（11:00/14:00のみ）",
         variable=use_nikkei_futures_filter_var,
     ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=6)
 

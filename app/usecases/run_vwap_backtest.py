@@ -46,11 +46,9 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     print("[2/3] 5分足データ取得")
     intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
-    nikkei_daily = pd.DataFrame()
     nikkei_intraday = pd.DataFrame()
     if config.use_nikkei_futures_filter and config.entry_time != ENTRY_PREV_CLOSE:
         print("[追加] 日経先物データ取得")
-        nikkei_daily = fetch_symbol_daily_price(config.nikkei_futures_symbol, config.start_date, config.end_date)
         nikkei_intraday = fetch_symbol_intraday_price(config.nikkei_futures_symbol, config.start_date, config.end_date)
     sox_daily = pd.DataFrame()
     if config.use_sox_semiconductor_filter:
@@ -62,7 +60,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     skipped = Counter()
     evaluated = 0
 
-    nikkei_down_cache: dict[pd.Timestamp, bool | None] = {}
+    nikkei_down_cache: dict[tuple[pd.Timestamp, pd.Timestamp], bool | None] = {}
     sox_down_cache: dict[pd.Timestamp, bool | None] = {}
 
     for item in watchlist_items:
@@ -164,8 +162,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
 
             if config.use_nikkei_futures_filter and config.entry_time != ENTRY_PREV_CLOSE:
                 nikkei_down = _nikkei_futures_down_at_0800(
-                    nikkei_daily,
                     nikkei_intraday,
+                    signal_date,
                     entry_date,
                     nikkei_down_cache,
                 )
@@ -601,18 +599,20 @@ def _nearest_support_distance_atr(row: pd.Series, price: float):
 
 
 def _nikkei_futures_down_at_0800(
-    daily: pd.DataFrame,
     intraday: pd.DataFrame,
+    signal_date: pd.Timestamp,
     entry_date: pd.Timestamp,
-    cache: dict[pd.Timestamp, bool | None],
+    cache: dict[tuple[pd.Timestamp, pd.Timestamp], bool | None],
 ) -> bool | None:
-    normalized_date = pd.Timestamp(entry_date).normalize()
-    if normalized_date in cache:
-        return cache[normalized_date]
-    previous_close = _latest_close_before(daily, normalized_date)
-    at_0800 = _intraday_close_at_or_before(intraday, normalized_date, "08:00")
-    value = None if previous_close is None or at_0800 is None else at_0800 < previous_close
-    cache[normalized_date] = value
+    normalized_signal_date = pd.Timestamp(signal_date).normalize()
+    normalized_entry_date = pd.Timestamp(entry_date).normalize()
+    cache_key = (normalized_signal_date, normalized_entry_date)
+    if cache_key in cache:
+        return cache[cache_key]
+    at_1530 = _intraday_snapshot_before(intraday, normalized_signal_date, "15:30")
+    at_0800 = _intraday_snapshot_before(intraday, normalized_entry_date, "08:00")
+    value = None if at_1530 is None or at_0800 is None else at_0800[0] < at_1530[0]
+    cache[cache_key] = value
     return value
 
 
@@ -634,13 +634,6 @@ def _sox_latest_close_down(
     return value
 
 
-def _latest_close_before(daily: pd.DataFrame, target_date: pd.Timestamp):
-    rows = _daily_rows_before(daily, target_date, 1)
-    if rows.empty:
-        return None
-    return _number(rows["Close"].iloc[-1])
-
-
 def _daily_rows_before(daily: pd.DataFrame, target_date: pd.Timestamp, count: int) -> pd.DataFrame:
     if daily is None or daily.empty or "Close" not in daily.columns:
         return pd.DataFrame()
@@ -649,7 +642,13 @@ def _daily_rows_before(daily: pd.DataFrame, target_date: pd.Timestamp, count: in
     return normalized.loc[normalized.index < pd.Timestamp(target_date).normalize()].tail(count)
 
 
-def _intraday_close_at_or_before(intraday: pd.DataFrame, trade_date: pd.Timestamp, cutoff: str):
+def _intraday_snapshot_before(
+    intraday: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    cutoff: str,
+    *,
+    max_age: pd.Timedelta = pd.Timedelta(minutes=30),
+) -> tuple[float, pd.Timestamp] | None:
     if intraday is None or intraday.empty or "Close" not in intraday.columns:
         return None
     normalized_date = pd.Timestamp(trade_date).normalize()
@@ -657,10 +656,16 @@ def _intraday_close_at_or_before(intraday: pd.DataFrame, trade_date: pd.Timestam
     if day.empty:
         return None
     cutoff_time = pd.Timestamp(f"{normalized_date.date()} {cutoff}")
-    eligible = day.loc[day.index <= cutoff_time]
+    # A yfinance timestamp marks the start of a five-minute bar. The bar at
+    # exactly the cutoff is not complete yet and must not be used.
+    eligible = day.loc[day.index < cutoff_time]
     if eligible.empty:
         return None
-    return _number(eligible["Close"].iloc[-1])
+    timestamp = pd.Timestamp(eligible.index[-1])
+    if cutoff_time - timestamp > max_age:
+        return None
+    close = _number(eligible["Close"].iloc[-1])
+    return None if close is None else (close, timestamp)
 
 
 def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:

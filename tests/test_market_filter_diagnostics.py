@@ -40,8 +40,10 @@ class MarketFilterDiagnosticsTest(unittest.TestCase):
             use_nikkei_futures_filter=True,
             use_sox_semiconductor_filter=True,
         )
-        nikkei_daily = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-06-01"]))
-        nikkei_intraday = pd.DataFrame({"Close": [99.0]}, index=pd.to_datetime(["2026-06-02 08:00"]))
+        nikkei_intraday = pd.DataFrame(
+            {"Close": [100.0, 99.0, 101.0]},
+            index=pd.to_datetime(["2026-06-01 15:25", "2026-06-02 07:55", "2026-06-02 08:00"]),
+        )
         sox_daily = pd.DataFrame(
             {"Close": [100.0, 99.0]},
             index=pd.to_datetime(["2026-05-29", "2026-06-01"]),
@@ -49,8 +51,6 @@ class MarketFilterDiagnosticsTest(unittest.TestCase):
 
         def fake_fetch(symbol: str, start: str, end: str, interval: str, *, use_cache: bool):
             self.assertFalse(use_cache)
-            if symbol == "NIY=F" and interval == "1d":
-                return nikkei_daily, self._metadata(symbol, interval, len(nikkei_daily))
             if symbol == "NIY=F" and interval == "5m":
                 return nikkei_intraday, self._metadata(symbol, interval, len(nikkei_intraday))
             if symbol == "^SOX" and interval == "1d":
@@ -65,10 +65,14 @@ class MarketFilterDiagnosticsTest(unittest.TestCase):
 
         self.assertTrue(diagnostics["nikkei"]["enabled"])
         self.assertEqual(diagnostics["nikkei"]["dates"][0]["status"], "OK: 下落")
+        self.assertEqual(diagnostics["nikkei"]["dates"][0]["close_before_1530"], 100.0)
+        self.assertEqual(diagnostics["nikkei"]["dates"][0]["timestamp_before_0800"], "2026-06-02 07:55:00")
         self.assertTrue(diagnostics["sox"]["enabled"])
         self.assertEqual(diagnostics["sox"]["dates"][0]["status"], "OK: 下落")
+        self.assertEqual(diagnostics["sox"]["dates"][0]["comparison_date"], "2026-05-29")
+        self.assertEqual(diagnostics["sox"]["dates"][0]["latest_date"], "2026-06-01")
         self.assertEqual(diagnostics["semiconductor_related_count"], 1)
-        self.assertEqual(diagnostics["nikkei"]["intraday"]["row_count"], 1)
+        self.assertEqual(diagnostics["nikkei"]["intraday"]["row_count"], 3)
 
     def test_saves_market_filter_diagnostics_markdown(self):
         diagnostics = {
@@ -83,13 +87,15 @@ class MarketFilterDiagnosticsTest(unittest.TestCase):
             "nikkei": {
                 "enabled": True,
                 "symbol": "NIY=F",
-                "daily": self._metadata("NIY=F", "1d", 1).__dict__,
-                "intraday": self._metadata("NIY=F", "5m", 1).__dict__,
+                "intraday": self._metadata("NIY=F", "5m", 2).__dict__,
                 "dates": [
                     {
                         "date": "2026-06-02",
-                        "previous_close": 100.0,
-                        "close_at_or_before_0800": 99.0,
+                        "reference_date": "2026-06-01",
+                        "close_before_1530": 100.0,
+                        "timestamp_before_1530": "2026-06-01 15:25:00",
+                        "close_before_0800": 99.0,
+                        "timestamp_before_0800": "2026-06-02 07:55:00",
                         "status": "OK: 下落",
                     }
                 ],
@@ -101,7 +107,9 @@ class MarketFilterDiagnosticsTest(unittest.TestCase):
                 "dates": [
                     {
                         "date": "2026-06-02",
+                        "comparison_date": "2026-05-29",
                         "previous_close": 100.0,
+                        "latest_date": "2026-06-01",
                         "latest_close": 99.0,
                         "status": "OK: 下落",
                     }
@@ -115,7 +123,12 @@ class MarketFilterDiagnosticsTest(unittest.TestCase):
 
         self.assertIn("# 市場フィルタ データ検証", markdown)
         self.assertIn("- キャッシュ: 無視して再取得", markdown)
-        self.assertIn("| 2026-06-02 | 100.00 | 99.00 | OK: 下落 |", markdown)
+        self.assertIn(
+            "| 2026-06-02 | 2026-06-01 | 100.00 (2026-06-01 15:25:00) | "
+            "99.00 (2026-06-02 07:55:00) | OK: 下落 |",
+            markdown,
+        )
+        self.assertIn("| 2026-06-02 | 2026-05-29 | 100.00 | 2026-06-01 | 99.00 | OK: 下落 |", markdown)
 
 
 if __name__ == "__main__":

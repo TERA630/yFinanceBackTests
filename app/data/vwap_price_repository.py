@@ -227,6 +227,16 @@ def _symbol_diagnostics(
 
 
 def _normalize(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        # yfinance returns (price field, ticker) columns even for a single
+        # symbol. Keep the level containing OHLCV field names so downstream
+        # code can consistently address columns such as "Close".
+        price_fields = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+        for level in range(df.columns.nlevels):
+            values = [str(value).title() for value in df.columns.get_level_values(level)]
+            if price_fields.intersection(values):
+                df.columns = values
+                break
     df.columns = [str(column).title() for column in df.columns]
     index = pd.DatetimeIndex(pd.to_datetime(df.index))
     if index.tz is not None:

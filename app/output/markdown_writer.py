@@ -156,20 +156,21 @@ def _market_filter_diagnostics_markdown(diagnostics: dict) -> str:
         "",
         f"- フィルタ状態: {'有効' if nikkei.get('enabled') else '無効または前日終値エントリーのため未使用'}",
         f"- シンボル: {nikkei.get('symbol', 'N/A')}",
-        "",
-        *_download_lines("日足", nikkei.get("daily", {})),
+        "- 判定条件: シグナル日15:30直前とエントリー日8:00直前の5分足を比較（各時点から30分以内）",
         "",
         *_download_lines("5分足", nikkei.get("intraday", {})),
         "",
         "### 日付別判定",
         "",
-        "| エントリー日 | 前日終値 | 8時時点 | 状態 |",
-        "|---:|---:|---:|---|",
+        "| エントリー日 | 基準日 | 15:30直前（バー時刻） | 8:00直前（バー時刻） | 状態 |",
+        "|---:|---:|---:|---:|---|",
     ]
     for row in nikkei.get("dates", []):
         lines.append(
-            f"| {row.get('date', 'N/A')} | {_plain_number(row.get('previous_close'))} | "
-            f"{_plain_number(row.get('close_at_or_before_0800'))} | {row.get('status', 'N/A')} |"
+            f"| {row.get('date', 'N/A')} | {row.get('reference_date', 'N/A')} | "
+            f"{_plain_number(row.get('close_before_1530'))} ({row.get('timestamp_before_1530') or 'N/A'}) | "
+            f"{_plain_number(row.get('close_before_0800'))} ({row.get('timestamp_before_0800') or 'N/A'}) | "
+            f"{row.get('status', 'N/A')} |"
         )
     lines.extend(
         [
@@ -183,13 +184,14 @@ def _market_filter_diagnostics_markdown(diagnostics: dict) -> str:
             "",
             "### 日付別判定",
             "",
-            "| エントリー日 | 比較前終値 | 最新終値 | 状態 |",
-            "|---:|---:|---:|---|",
+            "| エントリー日 | 比較前市場日 | 比較前終値 | 最新市場日 | 最新終値 | 状態 |",
+            "|---:|---:|---:|---:|---:|---|",
         ]
     )
     for row in sox.get("dates", []):
         lines.append(
-            f"| {row.get('date', 'N/A')} | {_plain_number(row.get('previous_close'))} | "
+            f"| {row.get('date', 'N/A')} | {row.get('comparison_date') or 'N/A'} | "
+            f"{_plain_number(row.get('previous_close'))} | {row.get('latest_date') or 'N/A'} | "
             f"{_plain_number(row.get('latest_close'))} | {row.get('status', 'N/A')} |"
         )
     lines.append("")
@@ -351,7 +353,10 @@ def _breakdown_score_condition(value) -> str:
 def _nikkei_filter_condition(summary: dict) -> str:
     if not summary.get("use_nikkei_futures_filter"):
         return "考慮しない"
-    return f"11:00/14:00のみ、{summary.get('nikkei_futures_symbol', 'NIY=F')}が8時時点で前日比下落なら除外"
+    return (
+        f"11:00/14:00のみ、{summary.get('nikkei_futures_symbol', 'NIY=F')}の8時直前値が"
+        "前営業日15:30直前値より下落なら除外（各30分以内）"
+    )
 
 
 def _sox_filter_condition(summary: dict) -> str:

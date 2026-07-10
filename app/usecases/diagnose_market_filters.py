@@ -14,7 +14,7 @@ from app.data.vwap_price_repository import (
     symbol_intraday_download_window,
 )
 from app.domain.vwap_backtest import A8BacktestConfig, ENTRY_PREV_CLOSE
-from app.usecases.run_vwap_backtest import _daily_rows_before, _intraday_close_at_or_before, _latest_close_before
+from app.usecases.run_vwap_backtest import _daily_rows_before, _intraday_snapshot_before
 from app.usecases.watchlist import load_watchlist_items
 
 
@@ -32,13 +32,6 @@ def diagnose_market_filters(
     intraday_start, intraday_end = symbol_intraday_download_window(config.start_date, config.end_date)
     use_cache = not ignore_cache
 
-    nikkei_daily, nikkei_daily_meta = fetch_symbol_price_diagnostics(
-        config.nikkei_futures_symbol,
-        daily_start,
-        daily_end,
-        "1d",
-        use_cache=use_cache,
-    )
     nikkei_intraday, nikkei_intraday_meta = fetch_symbol_price_diagnostics(
         config.nikkei_futures_symbol,
         intraday_start,
@@ -67,9 +60,8 @@ def diagnose_market_filters(
         "nikkei": {
             "enabled": bool(config.use_nikkei_futures_filter and config.entry_time != ENTRY_PREV_CLOSE),
             "symbol": config.nikkei_futures_symbol,
-            "daily": asdict(nikkei_daily_meta),
             "intraday": asdict(nikkei_intraday_meta),
-            "dates": _nikkei_date_diagnostics(nikkei_daily, nikkei_intraday, entry_dates),
+            "dates": _nikkei_date_diagnostics(nikkei_intraday, signal_dates, entry_dates),
         },
         "sox": {
             "enabled": bool(config.use_sox_semiconductor_filter),
@@ -87,29 +79,32 @@ def _market_entry_dates(signal_dates: list[pd.Timestamp], entry_time: str) -> li
 
 
 def _nikkei_date_diagnostics(
-    daily: pd.DataFrame,
     intraday: pd.DataFrame,
+    signal_dates: list[pd.Timestamp],
     entry_dates: list[pd.Timestamp],
 ) -> list[dict]:
     records = []
-    for entry_date in entry_dates:
-        previous_close = _latest_close_before(daily, entry_date)
-        at_0800 = _intraday_close_at_or_before(intraday, entry_date, "08:00")
-        if previous_close is None and at_0800 is None:
-            status = "NG: 前日終値・8時足なし"
-        elif previous_close is None:
-            status = "NG: 前日終値なし"
+    for signal_date, entry_date in zip(signal_dates, entry_dates):
+        at_1530 = _intraday_snapshot_before(intraday, signal_date, "15:30")
+        at_0800 = _intraday_snapshot_before(intraday, entry_date, "08:00")
+        if at_1530 is None and at_0800 is None:
+            status = "NG: 15時30分・8時足なし"
+        elif at_1530 is None:
+            status = "NG: 15時30分足なし"
         elif at_0800 is None:
             status = "NG: 8時足なし"
-        elif at_0800 < previous_close:
+        elif at_0800[0] < at_1530[0]:
             status = "OK: 下落"
         else:
             status = "OK: 下落なし"
         records.append(
             {
                 "date": entry_date.strftime("%Y-%m-%d"),
-                "previous_close": previous_close,
-                "close_at_or_before_0800": at_0800,
+                "reference_date": signal_date.strftime("%Y-%m-%d"),
+                "close_before_1530": None if at_1530 is None else at_1530[0],
+                "timestamp_before_1530": None if at_1530 is None else str(at_1530[1]),
+                "close_before_0800": None if at_0800 is None else at_0800[0],
+                "timestamp_before_0800": None if at_0800 is None else str(at_0800[1]),
                 "status": status,
             }
         )
@@ -132,7 +127,9 @@ def _sox_date_diagnostics(daily: pd.DataFrame, entry_dates: list[pd.Timestamp]) 
         records.append(
             {
                 "date": entry_date.strftime("%Y-%m-%d"),
+                "comparison_date": None if len(closes) < 2 else closes.index[-2].strftime("%Y-%m-%d"),
                 "previous_close": previous_close,
+                "latest_date": None if len(closes) < 2 else closes.index[-1].strftime("%Y-%m-%d"),
                 "latest_close": latest_close,
                 "status": status,
             }

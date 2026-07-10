@@ -31,7 +31,13 @@ from app.domain.vwap_backtest import (
     RESISTANCE_FAILURE_REJECT_APPROACH,
 )
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
-from app.usecases.run_vwap_backtest import _higher_high_count, _lower_low_count, build_summary, run_vwap_backtest
+from app.usecases.run_vwap_backtest import (
+    _higher_high_count,
+    _intraday_snapshot_before,
+    _lower_low_count,
+    build_summary,
+    run_vwap_backtest,
+)
 from app.usecases.watchlist import parse_watchlist_items
 from app.domain.vwap_backtest import VwapBacktestConfig
 
@@ -296,10 +302,15 @@ class MarketFilterTest(unittest.TestCase):
 
     def test_nikkei_futures_filter_rejects_1100_entry_when_0800_is_down(self):
         _, signal_date, entry_date, daily, intraday = self._daily_and_intraday()
-        nikkei_daily = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime([signal_date]))
         nikkei_intraday = pd.DataFrame(
-            {"Close": [99.0]},
-            index=pd.to_datetime([f"{entry_date.date()} 08:00"]),
+            {"Close": [100.0, 99.0, 101.0]},
+            index=pd.to_datetime(
+                [
+                    f"{signal_date.date()} 15:25",
+                    f"{entry_date.date()} 07:55",
+                    f"{entry_date.date()} 08:00",
+                ]
+            ),
         )
         config = VwapBacktestConfig(
             signal_date.strftime("%Y-%m-%d"),
@@ -316,8 +327,6 @@ class MarketFilterTest(unittest.TestCase):
             with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
                 "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
             ), patch(
-                "app.usecases.run_vwap_backtest.fetch_symbol_daily_price", return_value=nikkei_daily
-            ), patch(
                 "app.usecases.run_vwap_backtest.fetch_symbol_intraday_price", return_value=nikkei_intraday
             ):
                 trades, summary = run_vwap_backtest(watchlist, config)
@@ -325,6 +334,37 @@ class MarketFilterTest(unittest.TestCase):
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["日経先物8時下落"], 1)
         self.assertTrue(summary["use_nikkei_futures_filter"])
+
+    def test_intraday_snapshot_uses_completed_bar_before_cutoff(self):
+        trade_date = pd.Timestamp("2026-06-02")
+        intraday = pd.DataFrame(
+            {"Close": [99.0, 101.0]},
+            index=pd.to_datetime(["2026-06-02 07:55", "2026-06-02 08:00"]),
+        )
+
+        snapshot = _intraday_snapshot_before(intraday, trade_date, "08:00")
+
+        self.assertEqual(snapshot, (99.0, pd.Timestamp("2026-06-02 07:55")))
+
+    def test_intraday_snapshot_rejects_bar_older_than_30_minutes(self):
+        trade_date = pd.Timestamp("2026-06-02")
+        intraday = pd.DataFrame(
+            {"Close": [99.0]},
+            index=pd.to_datetime(["2026-06-02 07:25"]),
+        )
+
+        self.assertIsNone(_intraday_snapshot_before(intraday, trade_date, "08:00"))
+
+    def test_intraday_snapshot_accepts_bar_exactly_30_minutes_old(self):
+        trade_date = pd.Timestamp("2026-06-02")
+        intraday = pd.DataFrame(
+            {"Close": [99.0]},
+            index=pd.to_datetime(["2026-06-02 07:30"]),
+        )
+
+        snapshot = _intraday_snapshot_before(intraday, trade_date, "08:00")
+
+        self.assertEqual(snapshot, (99.0, pd.Timestamp("2026-06-02 07:30")))
 
     def test_sox_filter_rejects_tagged_semiconductor_related_stock_only(self):
         dates, signal_date, entry_date, daily, intraday = self._daily_and_intraday()
@@ -581,6 +621,36 @@ class HigherHighTest(unittest.TestCase):
 
 
 class YfinanceCacheTest(unittest.TestCase):
+    def test_flattens_single_symbol_multiindex_columns(self):
+        index = pd.to_datetime(["2026-06-01"])
+        columns = pd.MultiIndex.from_tuples(
+            [
+                ("Open", "NIY=F"),
+                ("High", "NIY=F"),
+                ("Low", "NIY=F"),
+                ("Close", "NIY=F"),
+                ("Volume", "NIY=F"),
+            ],
+            names=["Price", "Ticker"],
+        )
+        downloaded = pd.DataFrame(
+            [[100.0, 101.0, 99.0, 100.5, 1000.0]],
+            index=index,
+            columns=columns,
+        )
+
+        with TemporaryDirectory() as tmp:
+            with patch.object(vwap_price_repository, "CACHE_DIR", Path(tmp) / ".yfcache"), patch(
+                "app.data.vwap_price_repository.yf.download", return_value=downloaded
+            ):
+                result, diagnostics = vwap_price_repository._download_symbol_with_diagnostics(
+                    "NIY=F", "2026-06-01", "2026-06-02", "1d", use_cache=False
+                )
+
+        self.assertEqual(list(result.columns), ["Open", "High", "Low", "Close", "Volume"])
+        self.assertEqual(result.iloc[0]["Close"], 100.5)
+        self.assertEqual(diagnostics.columns, ("Open", "High", "Low", "Close", "Volume"))
+
     def test_reuses_cached_download_for_same_symbols_dates_and_interval(self):
         index = pd.to_datetime(["2026-06-01"])
         downloaded = pd.DataFrame(
