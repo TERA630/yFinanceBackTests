@@ -26,14 +26,6 @@ MA5_SLOWDOWN_POLICIES = (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
 )
-RESISTANCE_FAILURE_IGNORE = "ignore"
-RESISTANCE_FAILURE_REJECT_APPROACH = "reject_approach"
-RESISTANCE_FAILURE_REJECT_ALL = "reject_all"
-RESISTANCE_FAILURE_POLICIES = (
-    RESISTANCE_FAILURE_IGNORE,
-    RESISTANCE_FAILURE_REJECT_APPROACH,
-    RESISTANCE_FAILURE_REJECT_ALL,
-)
 MA25_NEGATIVE_SLOPE_REJECT = "reject"
 MA25_NEGATIVE_SLOPE_SCORE = "score"
 MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D = "reject_slowdown_5d"
@@ -44,8 +36,6 @@ MA25_NEGATIVE_SLOPE_POLICIES = (
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
 )
-DEFAULT_NIKKEI_FUTURES_SYMBOL = "NIY=F"
-DEFAULT_SOX_SYMBOL = "^SOX"
 
 
 @dataclass(frozen=True)
@@ -61,14 +51,8 @@ class A8BacktestConfig:
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
     ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
-    require_support_rebound: bool = False
-    resistance_failure_policy: str = RESISTANCE_FAILURE_IGNORE
     ma25_negative_slope_policy: str = MA25_NEGATIVE_SLOPE_REJECT
     breakdown_score_threshold: Optional[int] = None
-    use_nikkei_futures_filter: bool = False
-    use_sox_semiconductor_filter: bool = False
-    nikkei_futures_symbol: str = DEFAULT_NIKKEI_FUTURES_SYMBOL
-    sox_symbol: str = DEFAULT_SOX_SYMBOL
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -89,10 +73,6 @@ class A8BacktestConfig:
             raise ValueError("5日線傾き条件は有効または無効で指定してください。")
         if self.ma5_slope_slowdown_policy not in MA5_SLOWDOWN_POLICIES:
             raise ValueError("5日線傾き鈍化条件は対応する選択肢から指定してください。")
-        if not isinstance(self.require_support_rebound, bool):
-            raise ValueError("支持線反発確認は有効または無効で指定してください。")
-        if self.resistance_failure_policy not in RESISTANCE_FAILURE_POLICIES:
-            raise ValueError("抵抗線トライ失敗条件は対応する選択肢から指定してください。")
         if self.ma25_negative_slope_policy not in MA25_NEGATIVE_SLOPE_POLICIES:
             raise ValueError("25日線傾きの扱いは対応する選択肢から指定してください。")
         if self.breakdown_score_threshold is not None:
@@ -100,14 +80,6 @@ class A8BacktestConfig:
                 raise ValueError("崩れスコア除外閾値は整数で指定してください。")
             if not 0 <= self.breakdown_score_threshold <= 6:
                 raise ValueError("崩れスコア除外閾値は0～6点で指定してください。")
-        if not isinstance(self.use_nikkei_futures_filter, bool):
-            raise ValueError("日経先物8時フィルタは有効または無効で指定してください。")
-        if not isinstance(self.use_sox_semiconductor_filter, bool):
-            raise ValueError("SOX半導体フィルタは有効または無効で指定してください。")
-        if not str(self.nikkei_futures_symbol).strip():
-            raise ValueError("日経先物シンボルを指定してください。")
-        if not str(self.sox_symbol).strip():
-            raise ValueError("SOXシンボルを指定してください。")
 
 
 # Compatibility alias for callers using the old name.

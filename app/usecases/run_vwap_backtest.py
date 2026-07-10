@@ -11,8 +11,6 @@ import pandas as pd
 from app.data.vwap_price_repository import (
     fetch_daily_prices,
     fetch_intraday_prices,
-    fetch_symbol_daily_price,
-    fetch_symbol_intraday_price,
 )
 from app.domain.vwap_backtest import (
     EXCURSION_WINDOWS,
@@ -30,8 +28,6 @@ from app.domain.vwap_backtest import (
     MA25_NEGATIVE_SLOPE_REJECT,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
-    RESISTANCE_FAILURE_REJECT_ALL,
-    RESISTANCE_FAILURE_REJECT_APPROACH,
 )
 from app.usecases.watchlist import load_watchlist_items
 
@@ -46,22 +42,11 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     print("[2/3] 5分足データ取得")
     intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
-    nikkei_intraday = pd.DataFrame()
-    if config.use_nikkei_futures_filter and config.entry_time != ENTRY_PREV_CLOSE:
-        print("[追加] 日経先物データ取得")
-        nikkei_intraday = fetch_symbol_intraday_price(config.nikkei_futures_symbol, config.start_date, config.end_date)
-    sox_daily = pd.DataFrame()
-    if config.use_sox_semiconductor_filter:
-        print("[追加] SOXデータ取得")
-        sox_daily = fetch_symbol_daily_price(config.sox_symbol, config.start_date, config.end_date)
     print("[3/3] A9r4バックテスト")
 
     records: List[dict] = []
     skipped = Counter()
     evaluated = 0
-
-    nikkei_down_cache: dict[tuple[pd.Timestamp, pd.Timestamp], bool | None] = {}
-    sox_down_cache: dict[pd.Timestamp, bool | None] = {}
 
     for item in watchlist_items:
         name = item.name
@@ -97,17 +82,6 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
             higher_high_count = _higher_high_count(daily, daily_position)
             if config.higher_high_exclude_count > 0 and higher_high_count < config.higher_high_exclude_count:
                 skipped["高値更新回数が必要回数未満"] += 1
-                continue
-
-            support_rebound = _support_rebound(row)
-            if config.require_support_rebound:
-                if support_rebound is None:
-                    skipped["支持線反発なし"] += 1
-                    continue
-
-            resistance_failure = _resistance_failure(row, config.resistance_failure_policy)
-            if resistance_failure is not None:
-                skipped[f"抵抗線トライ失敗（{resistance_failure['failure_type']}）"] += 1
                 continue
 
             if config.entry_time == ENTRY_PREV_CLOSE:
@@ -159,29 +133,6 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     config.entry_time,
                     entry_price,
                 )
-
-            if config.use_nikkei_futures_filter and config.entry_time != ENTRY_PREV_CLOSE:
-                nikkei_down = _nikkei_futures_down_at_0800(
-                    nikkei_intraday,
-                    signal_date,
-                    entry_date,
-                    nikkei_down_cache,
-                )
-                if nikkei_down is None:
-                    skipped["日経先物8時データなし"] += 1
-                    continue
-                if nikkei_down:
-                    skipped["日経先物8時下落"] += 1
-                    continue
-
-            if config.use_sox_semiconductor_filter and item.is_semiconductor_related:
-                sox_down = _sox_latest_close_down(sox_daily, entry_date, sox_down_cache)
-                if sox_down is None:
-                    skipped["SOX前日終値データなし"] += 1
-                    continue
-                if sox_down:
-                    skipped["SOX下落かつ半導体関連"] += 1
-                    continue
 
             if config.range_position_min_pct is not None:
                 if range_position_pct is None:
@@ -282,14 +233,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "higher_low_count_3d": higher_low_count,
                 "higher_high_count_3d": higher_high_count,
                 "atr14_open": _number(row.get("ATR14Open")),
-                "support_rebound": support_rebound is not None,
-                "support_level_type": None if support_rebound is None else support_rebound["level_type"],
-                "support_level": None if support_rebound is None else support_rebound["level"],
                 "nearest_support_distance_atr": nearest_support_distance_atr,
-                "resistance_failure_policy": config.resistance_failure_policy,
-                "resistance_failure_type": None if resistance_failure is None else resistance_failure["failure_type"],
-                "resistance_level_type": None if resistance_failure is None else resistance_failure["level_type"],
-                "resistance_level": None if resistance_failure is None else resistance_failure["level"],
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
                 "breakdown_volume_ratio_20d": breakdown_volume_ratio_20d,
@@ -333,14 +277,8 @@ def build_summary(
         "range_position_min_pct": config.range_position_min_pct,
         "require_ma5_slope_positive": config.require_ma5_slope_positive,
         "ma5_slope_slowdown_policy": config.ma5_slope_slowdown_policy,
-        "require_support_rebound": config.require_support_rebound,
-        "resistance_failure_policy": config.resistance_failure_policy,
         "ma25_negative_slope_policy": config.ma25_negative_slope_policy,
         "breakdown_score_threshold": config.breakdown_score_threshold,
-        "use_nikkei_futures_filter": config.use_nikkei_futures_filter,
-        "use_sox_semiconductor_filter": config.use_sox_semiconductor_filter,
-        "nikkei_futures_symbol": config.nikkei_futures_symbol,
-        "sox_symbol": config.sox_symbol,
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -419,62 +357,6 @@ def _prepare_daily(df: pd.DataFrame) -> pd.DataFrame:
     ).max(axis=1)
     result["ATR14Open"] = true_range.rolling(14).mean().shift(1)
     return result.sort_index()
-
-
-def _support_rebound(row: pd.Series) -> dict | None:
-    """Return the nearest open-known support that was tested and reclaimed today."""
-    atr = _number(row.get("ATR14Open"))
-    low = _number(row.get("Low"))
-    close = _number(row.get("Close"))
-    if atr is None or atr <= 0 or low is None or close is None:
-        return None
-
-    matches = []
-    for level_type, column in (
-        ("25日線", "MA25Open"),
-        ("20日安値", "Low20Open"),
-        ("60日安値", "Low60Open"),
-        ("75日線", "MA75Open"),
-    ):
-        level = _number(row.get(column))
-        if level is None or level >= close:
-            continue
-        if abs(low - level) <= 0.35 * atr and close >= level + 0.10 * atr:
-            matches.append({"level_type": level_type, "level": level})
-    if not matches:
-        return None
-    return min(matches, key=lambda match: close - match["level"])
-
-
-def _resistance_failure(row: pd.Series, policy: str) -> dict | None:
-    """Return the nearest open-known resistance that rejected today's advance."""
-    if policy not in (RESISTANCE_FAILURE_REJECT_APPROACH, RESISTANCE_FAILURE_REJECT_ALL):
-        return None
-    atr = _number(row.get("ATR14Open"))
-    high = _number(row.get("High"))
-    close = _number(row.get("Close"))
-    if atr is None or atr <= 0 or high is None or close is None:
-        return None
-
-    matches = []
-    for level_type, column in (
-        ("25日線", "MA25Open"),
-        ("20日高値", "High20Open"),
-        ("60日高値", "High60Open"),
-    ):
-        level = _number(row.get(column))
-        if level is None or level <= close:
-            continue
-        close_rejected = close <= level - 0.10 * atr
-        approached_and_stalled = level - 0.35 * atr <= high < level and close_rejected
-        false_breakout = high >= level and close_rejected
-        if approached_and_stalled:
-            matches.append({"level_type": level_type, "level": level, "failure_type": "接近失速"})
-        elif policy == RESISTANCE_FAILURE_REJECT_ALL and false_breakout:
-            matches.append({"level_type": level_type, "level": level, "failure_type": "だまし突破"})
-    if not matches:
-        return None
-    return min(matches, key=lambda match: match["level"] - close)
 
 
 def _provisional_ma25(daily: pd.DataFrame, signal_position: int, entry_price: float):
@@ -596,76 +478,6 @@ def _nearest_support_distance_atr(row: pd.Series, price: float):
         return None
     nearest = max(levels)
     return (price - nearest) / atr
-
-
-def _nikkei_futures_down_at_0800(
-    intraday: pd.DataFrame,
-    signal_date: pd.Timestamp,
-    entry_date: pd.Timestamp,
-    cache: dict[tuple[pd.Timestamp, pd.Timestamp], bool | None],
-) -> bool | None:
-    normalized_signal_date = pd.Timestamp(signal_date).normalize()
-    normalized_entry_date = pd.Timestamp(entry_date).normalize()
-    cache_key = (normalized_signal_date, normalized_entry_date)
-    if cache_key in cache:
-        return cache[cache_key]
-    at_1530 = _intraday_snapshot_before(intraday, normalized_signal_date, "15:30")
-    at_0800 = _intraday_snapshot_before(intraday, normalized_entry_date, "08:00")
-    value = None if at_1530 is None or at_0800 is None else at_0800[0] < at_1530[0]
-    cache[cache_key] = value
-    return value
-
-
-def _sox_latest_close_down(
-    daily: pd.DataFrame,
-    entry_date: pd.Timestamp,
-    cache: dict[pd.Timestamp, bool | None],
-) -> bool | None:
-    normalized_date = pd.Timestamp(entry_date).normalize()
-    if normalized_date in cache:
-        return cache[normalized_date]
-    rows = _daily_rows_before(daily, normalized_date, 2)
-    if len(rows) < 2:
-        cache[normalized_date] = None
-        return None
-    closes = pd.to_numeric(rows["Close"], errors="coerce").dropna()
-    value = None if len(closes) < 2 else bool(closes.iloc[-1] < closes.iloc[-2])
-    cache[normalized_date] = value
-    return value
-
-
-def _daily_rows_before(daily: pd.DataFrame, target_date: pd.Timestamp, count: int) -> pd.DataFrame:
-    if daily is None or daily.empty or "Close" not in daily.columns:
-        return pd.DataFrame()
-    normalized = daily.copy()
-    normalized.index = pd.DatetimeIndex(normalized.index).normalize()
-    return normalized.loc[normalized.index < pd.Timestamp(target_date).normalize()].tail(count)
-
-
-def _intraday_snapshot_before(
-    intraday: pd.DataFrame,
-    trade_date: pd.Timestamp,
-    cutoff: str,
-    *,
-    max_age: pd.Timedelta = pd.Timedelta(minutes=30),
-) -> tuple[float, pd.Timestamp] | None:
-    if intraday is None or intraday.empty or "Close" not in intraday.columns:
-        return None
-    normalized_date = pd.Timestamp(trade_date).normalize()
-    day = intraday.loc[intraday.index.normalize() == normalized_date]
-    if day.empty:
-        return None
-    cutoff_time = pd.Timestamp(f"{normalized_date.date()} {cutoff}")
-    # A yfinance timestamp marks the start of a five-minute bar. The bar at
-    # exactly the cutoff is not complete yet and must not be used.
-    eligible = day.loc[day.index < cutoff_time]
-    if eligible.empty:
-        return None
-    timestamp = pd.Timestamp(eligible.index[-1])
-    if cutoff_time - timestamp > max_age:
-        return None
-    close = _number(eligible["Close"].iloc[-1])
-    return None if close is None else (close, timestamp)
 
 
 def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:

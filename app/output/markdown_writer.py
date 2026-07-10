@@ -19,9 +19,6 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
-    RESISTANCE_FAILURE_IGNORE,
-    RESISTANCE_FAILURE_REJECT_ALL,
-    RESISTANCE_FAILURE_REJECT_APPROACH,
 )
 
 
@@ -31,11 +28,6 @@ MA5_SLOWDOWN_LABELS = {
     MA5_SLOWDOWN_ALLOW_ONE: "前日・3日前のいずれかのみ許容",
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO: "3日前のみ許容",
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY: "前日のみ許容",
-}
-RESISTANCE_FAILURE_LABELS = {
-    RESISTANCE_FAILURE_IGNORE: "考慮しない",
-    RESISTANCE_FAILURE_REJECT_APPROACH: "接近して失速した場合は除外",
-    RESISTANCE_FAILURE_REJECT_ALL: "接近失速・だまし突破の両方を除外",
 }
 MA25_NEGATIVE_SLOPE_LABELS = {
     MA25_NEGATIVE_SLOPE_REJECT: "傾き負を即除外",
@@ -52,18 +44,6 @@ def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tup
     summary_path.write_text(_summary_markdown(summary), encoding="utf-8")
     result_path.write_text(_result_markdown(trades, summary), encoding="utf-8")
     return summary_path, result_path
-
-
-def save_market_filter_diagnostics(out_dir: Path, diagnostics: dict) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    index = 1
-    while True:
-        path = out_dir / f"market_filter_diagnostics_{timestamp}-{index}.md"
-        if not path.exists():
-            path.write_text(_market_filter_diagnostics_markdown(diagnostics), encoding="utf-8")
-            return path
-        index += 1
 
 
 def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
@@ -136,68 +116,6 @@ def _summary_markdown(summary: dict) -> str:
     return "\n".join(lines)
 
 
-def _market_filter_diagnostics_markdown(diagnostics: dict) -> str:
-    nikkei = diagnostics.get("nikkei", {})
-    sox = diagnostics.get("sox", {})
-    lines = [
-        "# 市場フィルタ データ検証",
-        "",
-        "## 実行条件",
-        "",
-        f"- 生成日時: {diagnostics.get('generated_at', 'N/A')}",
-        f"- 判定期間: {diagnostics.get('start_date', 'N/A')} ～ {diagnostics.get('end_date', 'N/A')}",
-        f"- エントリー時刻: {_entry_label(diagnostics.get('entry_time', ''))}",
-        f"- キャッシュ: {'無視して再取得' if diagnostics.get('ignore_cache') else '利用'}",
-        f"- 監視銘柄数: {diagnostics.get('watchlist_count', 0)}",
-        f"- 半導体・AIインフラ銘柄数: {diagnostics.get('semiconductor_related_count', 0)}",
-        f"- 診断対象営業日数: {diagnostics.get('signal_date_count', 0)}",
-        "",
-        "## 日経先物",
-        "",
-        f"- フィルタ状態: {'有効' if nikkei.get('enabled') else '無効または前日終値エントリーのため未使用'}",
-        f"- シンボル: {nikkei.get('symbol', 'N/A')}",
-        "- 判定条件: シグナル日15:30直前とエントリー日8:00直前の5分足を比較（各時点から30分以内）",
-        "",
-        *_download_lines("5分足", nikkei.get("intraday", {})),
-        "",
-        "### 日付別判定",
-        "",
-        "| エントリー日 | 基準日 | 15:30直前（バー時刻） | 8:00直前（バー時刻） | 状態 |",
-        "|---:|---:|---:|---:|---|",
-    ]
-    for row in nikkei.get("dates", []):
-        lines.append(
-            f"| {row.get('date', 'N/A')} | {row.get('reference_date', 'N/A')} | "
-            f"{_plain_number(row.get('close_before_1530'))} ({row.get('timestamp_before_1530') or 'N/A'}) | "
-            f"{_plain_number(row.get('close_before_0800'))} ({row.get('timestamp_before_0800') or 'N/A'}) | "
-            f"{row.get('status', 'N/A')} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## SOX",
-            "",
-            f"- フィルタ状態: {'有効' if sox.get('enabled') else '無効'}",
-            f"- シンボル: {sox.get('symbol', 'N/A')}",
-            "",
-            *_download_lines("日足", sox.get("daily", {})),
-            "",
-            "### 日付別判定",
-            "",
-            "| エントリー日 | 比較前市場日 | 比較前終値 | 最新市場日 | 最新終値 | 状態 |",
-            "|---:|---:|---:|---:|---:|---|",
-        ]
-    )
-    for row in sox.get("dates", []):
-        lines.append(
-            f"| {row.get('date', 'N/A')} | {row.get('comparison_date') or 'N/A'} | "
-            f"{_plain_number(row.get('previous_close'))} | {row.get('latest_date') or 'N/A'} | "
-            f"{_plain_number(row.get('latest_close'))} | {row.get('status', 'N/A')} |"
-        )
-    lines.append("")
-    return "\n".join(lines)
-
-
 def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
     entry_only_count = _entry_only_count(trades)
     completed_trades = _completed_result_trades(trades)
@@ -228,7 +146,6 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 直近3日の安値切り下げ回数: {int(row['lower_low_count_3d'])}回",
             f"- 直近3日の高値更新回数: {int(row.get('higher_high_count_3d', 0))}回",
             f"- 始値時点ATR14: {_price(row.get('atr14_open'))}",
-            f"- 支持線反発: {_support_rebound(row)}",
             f"- エントリー時刻: {_entry_label(row['entry_time'])}",
             f"- 買値: {_price(row['entry_price'])}",
             f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
@@ -278,8 +195,6 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
         f"- 25日線傾き: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
         f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
-        f"- 日経先物8時フィルタ: {_nikkei_filter_condition(summary)}",
-        f"- SOX半導体フィルタ: {_sox_filter_condition(summary)}",
         f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
         f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
         "- VWAP: 単独除外なし（崩れスコアで判定）",
@@ -287,8 +202,6 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- 3日間の安値切り下げ: {_lower_low_condition(summary.get('lower_low_exclude_count'))}",
         f"- 3日間の高値更新条件: {summary.get('higher_high_exclude_count', 0)}回以上"
         if summary.get('higher_high_exclude_count', 0) > 0 else "- 3日間の高値更新条件: 考慮しない",
-        f"- 支持線反発: {'確認する' if summary.get('require_support_rebound') else '確認しない'}",
-        f"- 抵抗線トライ失敗: {_resistance_failure_label(summary.get('resistance_failure_policy'))}",
         f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
         f"- 評価件数: {summary['evaluated_count']}",
@@ -338,59 +251,12 @@ def _ma5_slowdown_label(value) -> str:
     return MA5_SLOWDOWN_LABELS.get(value, MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
 
 
-def _resistance_failure_label(value) -> str:
-    return RESISTANCE_FAILURE_LABELS.get(value, RESISTANCE_FAILURE_LABELS[RESISTANCE_FAILURE_IGNORE])
-
-
 def _ma25_negative_slope_label(value) -> str:
     return MA25_NEGATIVE_SLOPE_LABELS.get(value, MA25_NEGATIVE_SLOPE_LABELS[MA25_NEGATIVE_SLOPE_REJECT])
 
 
 def _breakdown_score_condition(value) -> str:
     return "考慮しない" if value is None or pd.isna(value) else f"{int(value)}点以上を除外"
-
-
-def _nikkei_filter_condition(summary: dict) -> str:
-    if not summary.get("use_nikkei_futures_filter"):
-        return "考慮しない"
-    return (
-        f"11:00/14:00のみ、{summary.get('nikkei_futures_symbol', 'NIY=F')}の8時直前値が"
-        "前営業日15:30直前値より下落なら除外（各30分以内）"
-    )
-
-
-def _sox_filter_condition(summary: dict) -> str:
-    if not summary.get("use_sox_semiconductor_filter"):
-        return "考慮しない"
-    return f"{summary.get('sox_symbol', '^SOX')}前日終値が下落なら、半導体・AIインフラ銘柄を除外"
-
-
-def _download_lines(label: str, metadata: dict) -> list[str]:
-    columns = metadata.get("columns") or ()
-    column_label = ", ".join(str(column) for column in columns) if columns else "N/A"
-    return [
-        f"### {label}取得",
-        "",
-        f"- 取得範囲: {metadata.get('start', 'N/A')} ～ {metadata.get('end', 'N/A')}",
-        f"- 行数: {metadata.get('row_count', 0)}",
-        f"- 先頭時刻: {metadata.get('first_timestamp') or 'N/A'}",
-        f"- 末尾時刻: {metadata.get('last_timestamp') or 'N/A'}",
-        f"- 列: {column_label}",
-        f"- キャッシュパス: {metadata.get('cache_path', 'N/A')}",
-        f"- キャッシュ存在: {'あり' if metadata.get('cache_exists') else 'なし'}",
-        f"- キャッシュヒット: {'あり' if metadata.get('cache_hit') else 'なし'}",
-        f"- エラー: {metadata.get('error') or 'なし'}",
-    ]
-
-
-def _support_rebound(row: pd.Series) -> str:
-    if not row.get("support_rebound", False):
-        return "なし"
-    level_type = row.get("support_level_type")
-    level = row.get("support_level")
-    if level_type is None or level is None or pd.isna(level):
-        return "あり"
-    return f"{level_type} ({_price(level)})"
 
 
 def _first_touch(value) -> str:
@@ -403,10 +269,6 @@ def _first_touch(value) -> str:
 
 def _price(value) -> str:
     return "N/A" if value is None or pd.isna(value) else f"{float(value):,.2f}円"
-
-
-def _plain_number(value) -> str:
-    return "N/A" if value is None or pd.isna(value) else f"{float(value):,.2f}"
 
 
 def _percent(value) -> str:
