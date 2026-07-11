@@ -66,8 +66,6 @@ class A8BacktestConfig:
             raise ValueError("25日乖離率の最低値は最高値より小さくしてください。")
         if self.entry_time not in ENTRY_TIMES:
             raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
-        if self.entry_time == ENTRY_OPEN and self.range_position_min_pct is not None:
-            raise ValueError("始値エントリーでは終値位置・終端位置条件を使えません。")
         if self.entry_time == ENTRY_OPEN and self.breakdown_score_threshold is not None:
             raise ValueError("始値エントリーでは崩れスコア条件を使えません。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):

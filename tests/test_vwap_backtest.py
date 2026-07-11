@@ -125,14 +125,6 @@ class VwapCalculationTest(unittest.TestCase):
         self.assertFalse(requires_intraday_prices(config))
 
     def test_open_entry_rejects_intraday_only_conditions(self):
-        range_position = VwapBacktestConfig(
-            "2026-06-01",
-            "2026-06-10",
-            -5.0,
-            5.0,
-            ENTRY_OPEN,
-            range_position_min_pct=40.0,
-        )
         breakdown_score = VwapBacktestConfig(
             "2026-06-01",
             "2026-06-10",
@@ -142,8 +134,6 @@ class VwapCalculationTest(unittest.TestCase):
             breakdown_score_threshold=3,
         )
 
-        with self.assertRaisesRegex(ValueError, "始値エントリーでは終値位置・終端位置"):
-            range_position.validate()
         with self.assertRaisesRegex(ValueError, "始値エントリーでは崩れスコア"):
             breakdown_score.validate()
 
@@ -299,6 +289,39 @@ class SupportResistanceFilterTest(unittest.TestCase):
         self.assertEqual(trades.iloc[0]["entry_price"], 105.0)
         self.assertEqual(trades.iloc[0]["entry_time"], ENTRY_OPEN)
         self.assertFalse(summary["uses_intraday_prices"])
+
+    def test_open_entry_can_filter_by_previous_daily_close_position(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize() - pd.Timedelta(days=120), periods=90)
+        signal_date = dates[70]
+        entry_date = dates[71]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 110.0, "Low": 90.0, "Close": 102.0, "Volume": 1000.0},
+            index=dates,
+        )
+        daily.loc[signal_date, ["High", "Low", "Close"]] = [110.0, 90.0, 102.0]
+        daily.loc[entry_date, "Open"] = 105.0
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            3.0,
+            ENTRY_OPEN,
+            range_position_min_pct=60.0,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices",
+                side_effect=AssertionError("5分足は取得しない"),
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["entry_price"], 105.0)
+        self.assertAlmostEqual(trades.iloc[0]["entry_range_position_pct"], 60.0)
+        self.assertEqual(summary["range_position_min_pct"], 60.0)
 
     def test_intraday_config_keeps_sixty_day_start_limit(self):
         old_date = pd.offsets.BDay().rollback(pd.Timestamp.now().normalize() - pd.Timedelta(days=90))

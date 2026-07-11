@@ -338,9 +338,8 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             return
         range_position_label_var.set("終値位置")
         if daily_entry_var.get() == "翌営業日始値":
-            range_position_var.set("考慮せず")
             breakdown_score_var.set("考慮しない")
-            range_position_box.configure(state="disabled")
+            range_position_box.configure(state="readonly")
             breakdown_score_box.configure(state="disabled")
         else:
             range_position_box.configure(state="readonly")

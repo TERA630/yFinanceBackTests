@@ -140,7 +140,11 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 support_row = entry_row
                 breakdown_candle = {"open": None, "high": None, "low": None, "close": None}
                 breakdown_volume_ratio_20d = None
-                range_position_pct = None
+                range_position_pct = calculate_range_position_pct(
+                    _number(row.get("Low")),
+                    _number(row.get("High")),
+                    previous_close,
+                )
             else:
                 next_position = daily_position + 1
                 if next_position >= len(daily):
