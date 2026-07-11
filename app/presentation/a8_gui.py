@@ -23,6 +23,7 @@ from app.domain.vwap_backtest import (
     A8BacktestConfig,
     ENTRY_1100,
     ENTRY_1400,
+    ENTRY_OPEN,
     ENTRY_PREV_CLOSE,
     MA25_NEGATIVE_SLOPE_REJECT,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
@@ -33,6 +34,7 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
+    requires_intraday_prices,
 )
 from app.presentation.a8_settings import load_watchlist_path, save_watchlist_path
 
@@ -64,7 +66,11 @@ BREAKDOWN_SCORE_VALUES = {
     "3点以上": 3,
     "4点以上": 4,
     "5点以上": 5,
-    "6点以上": 6,
+}
+SUPPORT_DISTANCE_VALUES = {
+    "考慮しない": None,
+    "0.7ATR超を除外": 0.7,
+    "1.0ATR超を除外": 1.0,
 }
 
 
@@ -82,7 +88,7 @@ def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit
 
 def summarize_condition(gui_input: A8GuiInput) -> str:
     config = gui_input.config
-    entry_label = "前日終値" if config.entry_time == ENTRY_PREV_CLOSE else config.entry_time
+    entry_label = _entry_label(config.entry_time)
     lower_low_label = f"安値切下げ:{LOWER_LOW_LABELS.get(config.lower_low_exclude_count, '考慮しない')}"
     higher_high_label = (
         "高値更新考慮なし"
@@ -93,6 +99,11 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         "終端位置考慮せず"
         if config.range_position_min_pct is None
         else f"終端位置{config.range_position_min_pct:g}%以上"
+    )
+    support_label = (
+        "支持線距離考慮なし"
+        if config.support_distance_max_atr is None
+        else f"支持線距離{config.support_distance_max_atr:g}ATR以内"
     )
     ma5_label = "5日線上向き" if config.require_ma5_slope_positive else "5日線条件なし"
     ma5_slowdown_label = MA5_SLOWDOWN_LABELS.get(config.ma5_slope_slowdown_policy, "考慮しない")
@@ -105,7 +116,7 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
         f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
-        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
+        f"{support_label} / {ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
         f"{breakdown_label}"
     )
 
@@ -115,6 +126,16 @@ def default_date_range(now: Optional[pd.Timestamp] = None) -> tuple[pd.Timestamp
     end_date = pd.offsets.BDay().rollback(today)
     start_date = pd.offsets.BDay().rollforward(today - pd.Timedelta(days=59))
     return pd.Timestamp(start_date), pd.Timestamp(end_date)
+
+
+def _entry_label(value: str) -> str:
+    labels = {
+        ENTRY_PREV_CLOSE: "日足:前日終値",
+        ENTRY_OPEN: "日足:翌営業日始値",
+        ENTRY_1100: "日中足:11:00",
+        ENTRY_1400: "日中足:14:00",
+    }
+    return labels.get(value, value)
 
 
 def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
@@ -134,10 +155,13 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     output_var = tk.StringVar(value=str(remembered_watchlist.parent) if remembered_watchlist else "")
     min_var = tk.StringVar(value="-5.0")
     max_var = tk.StringVar(value="5.0")
-    entry_var = tk.StringVar(value=ENTRY_1100)
+    entry_mode_var = tk.StringVar(value="intraday")
+    daily_entry_var = tk.StringVar(value="翌営業日始値")
+    intraday_entry_var = tk.StringVar(value=ENTRY_1100)
     lower_low_var = tk.StringVar(value=LOWER_LOW_LABELS[0])
     higher_high_var = tk.StringVar(value="考慮しない")
     range_position_var = tk.StringVar(value="考慮せず")
+    support_distance_var = tk.StringVar(value="考慮しない")
     require_ma5_slope_var = tk.BooleanVar(value=False)
     ma5_slowdown_var = tk.StringVar(value=MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
     ma25_negative_slope_var = tk.StringVar(value=MA25_NEGATIVE_SLOPE_LABELS[MA25_NEGATIVE_SLOPE_REJECT])
@@ -186,17 +210,39 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     ttk.Label(frame, text="25日乖離率 最高値 (%)").grid(row=5, column=0, sticky="w", pady=6)
     ttk.Entry(frame, textvariable=max_var, width=16).grid(row=5, column=1, sticky="w")
 
-    ttk.Label(frame, text="エントリー時刻").grid(row=6, column=0, sticky="w", pady=6)
-    entry_box = ttk.Combobox(
-        frame,
-        textvariable=entry_var,
-        values=("前日終値", ENTRY_1100, ENTRY_1400),
-        state="readonly",
-        width=14,
-    )
-    entry_box.grid(row=6, column=1, sticky="w")
+    entry_frame = ttk.LabelFrame(frame, text="エントリー条件")
+    entry_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 6))
+    entry_frame.columnconfigure(1, weight=1)
 
-    exclusion_frame = ttk.LabelFrame(frame, text="単項目除外")
+    ttk.Radiobutton(
+        entry_frame,
+        text="日足",
+        variable=entry_mode_var,
+        value="daily",
+    ).grid(row=0, column=0, sticky="w", padx=10, pady=6)
+    ttk.Combobox(
+        entry_frame,
+        textvariable=daily_entry_var,
+        values=("翌営業日始値", "前日終値"),
+        state="readonly",
+        width=16,
+    ).grid(row=0, column=1, sticky="w", padx=10, pady=6)
+
+    ttk.Radiobutton(
+        entry_frame,
+        text="日中足（5分足）",
+        variable=entry_mode_var,
+        value="intraday",
+    ).grid(row=1, column=0, sticky="w", padx=10, pady=6)
+    ttk.Combobox(
+        entry_frame,
+        textvariable=intraday_entry_var,
+        values=(ENTRY_1100, ENTRY_1400),
+        state="readonly",
+        width=16,
+    ).grid(row=1, column=1, sticky="w", padx=10, pady=6)
+
+    exclusion_frame = ttk.LabelFrame(frame, text="日足条件")
     exclusion_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(10, 6))
     exclusion_frame.columnconfigure(1, weight=1)
 
@@ -227,31 +273,40 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=14,
     ).grid(row=2, column=1, sticky="w", padx=10, pady=6)
 
+    ttk.Label(exclusion_frame, text="直下支持線距離").grid(row=3, column=0, sticky="w", padx=10, pady=6)
+    ttk.Combobox(
+        exclusion_frame,
+        textvariable=support_distance_var,
+        values=tuple(SUPPORT_DISTANCE_VALUES.keys()),
+        state="readonly",
+        width=18,
+    ).grid(row=3, column=1, sticky="w", padx=10, pady=6)
+
     ttk.Checkbutton(
         exclusion_frame,
         text="5日線傾き > 0 を条件にする",
         variable=require_ma5_slope_var,
-    ).grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=6)
+    ).grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="5日線傾き鈍化").grid(row=4, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(exclusion_frame, text="5日線傾き鈍化").grid(row=5, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
         exclusion_frame,
         textvariable=ma5_slowdown_var,
         values=tuple(MA5_SLOWDOWN_VALUES.keys()),
         state="readonly",
         width=30,
-    ).grid(row=4, column=1, sticky="w", padx=10, pady=6)
+    ).grid(row=5, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="25日線傾き").grid(row=5, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(exclusion_frame, text="25日線傾き").grid(row=6, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
         exclusion_frame,
         textvariable=ma25_negative_slope_var,
         values=tuple(MA25_NEGATIVE_SLOPE_VALUES.keys()),
         state="readonly",
         width=32,
-    ).grid(row=5, column=1, sticky="w", padx=10, pady=6)
+    ).grid(row=6, column=1, sticky="w", padx=10, pady=6)
 
-    score_frame = ttk.LabelFrame(frame, text="崩れスコア")
+    score_frame = ttk.LabelFrame(frame, text="日中足条件（5分足）")
     score_frame.grid(row=8, column=0, columnspan=3, sticky="ew", pady=6)
     score_frame.columnconfigure(1, weight=1)
 
@@ -272,8 +327,8 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     )
     help_label.grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 16))
     help_var.set(
-        "VWAPは単独除外せず、崩れスコアの材料として判定します。\n"
-        "終端位置はエントリー時点までの確定レンジ内の位置で判定します。"
+        "崩れスコアは5分足を使って判定します。\n"
+        "日足エントリーかつ崩れスコア考慮なしの条件では、日足だけで判定します。"
     )
 
     saved_queue: list[A8GuiInput] = []
@@ -304,8 +359,10 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             raise ValueError("監視銘柄ファイルを選択してください。")
         if not output_var.get().strip():
             raise ValueError("出力先フォルダを選択してください。")
-        selected = entry_var.get()
-        entry_time = ENTRY_PREV_CLOSE if selected == "前日終値" else selected
+        if entry_mode_var.get() == "daily":
+            entry_time = ENTRY_OPEN if daily_entry_var.get() == "翌営業日始値" else ENTRY_PREV_CLOSE
+        else:
+            entry_time = intraday_entry_var.get()
         selected_range_position = range_position_var.get()
         range_position_min_pct = (
             None if selected_range_position == "考慮せず" else float(selected_range_position.removesuffix("%以上"))
@@ -322,15 +379,17 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             lower_low_exclude_count=LOWER_LOW_VALUES[lower_low_var.get()],
             higher_high_exclude_count=higher_high_exclude_count,
             range_position_min_pct=range_position_min_pct,
+            support_distance_max_atr=SUPPORT_DISTANCE_VALUES[support_distance_var.get()],
             require_ma5_slope_positive=require_ma5_slope_var.get(),
             ma5_slope_slowdown_policy=MA5_SLOWDOWN_VALUES[ma5_slowdown_var.get()],
             ma25_negative_slope_policy=MA25_NEGATIVE_SLOPE_VALUES[ma25_negative_slope_var.get()],
             breakdown_score_threshold=BREAKDOWN_SCORE_VALUES[breakdown_score_var.get()],
         )
         config.validate()
-        oldest = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
-        if pd.Timestamp(config.start_date) < oldest:
-            raise ValueError(f"開始日は {oldest.strftime('%Y-%m-%d')} 以降にしてください。")
+        if requires_intraday_prices(config):
+            oldest = pd.offsets.BDay().rollforward(pd.Timestamp.now().normalize() - pd.Timedelta(days=59))
+            if pd.Timestamp(config.start_date) < oldest:
+                raise ValueError(f"5分足を使うため、開始日は {oldest.strftime('%Y-%m-%d')} 以降にしてください。")
         if pd.Timestamp(config.end_date) > pd.Timestamp.now().normalize():
             raise ValueError("終了日に未来の日付は指定できません。")
         save_watchlist_path(stock_file)

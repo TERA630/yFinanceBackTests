@@ -7,6 +7,7 @@ from app.domain.vwap_backtest import (
     A8BacktestConfig,
     ENTRY_1100,
     ENTRY_1400,
+    ENTRY_OPEN,
     ENTRY_PREV_CLOSE,
     MA5_SLOWDOWN_ALLOW_ONE,
 )
@@ -74,9 +75,10 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         )
 
         self.assertIn("25日乖離 -3.5%超-4%以下", summary)
-        self.assertIn("14:00", summary)
+        self.assertIn("日中足:14:00", summary)
         self.assertIn("安値切下げ:3日のうち2回安値切下げ", summary)
         self.assertIn("高値更新考慮なし", summary)
+        self.assertIn("支持線距離考慮なし", summary)
         self.assertIn("5日線上向き", summary)
         self.assertIn("25日線傾き:傾き負を即除外", summary)
         self.assertIn("崩れスコア考慮なし", summary)
@@ -98,7 +100,24 @@ class A8GuiSavedConditionTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("前日終値", summary)
+        self.assertIn("日足:前日終値", summary)
+
+    def test_open_condition_summary_uses_daily_label(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_OPEN,
+                ),
+            )
+        )
+
+        self.assertIn("日足:翌営業日始値", summary)
 
     def test_condition_summary_includes_range_position_threshold(self):
         summary = summarize_condition(
@@ -117,6 +136,24 @@ class A8GuiSavedConditionTests(unittest.TestCase):
         )
 
         self.assertIn("終端位置40%以上", summary)
+
+    def test_condition_summary_includes_support_distance_filter(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_PREV_CLOSE,
+                    support_distance_max_atr=0.7,
+                ),
+            )
+        )
+
+        self.assertIn("支持線距離0.7ATR以内", summary)
 
     def test_condition_summary_includes_higher_high_exclusion(self):
         summary = summarize_condition(

@@ -10,6 +10,7 @@ import pandas as pd
 from app.data import vwap_price_repository
 from app.domain.vwap_backtest import (
     BreakdownScoreInput,
+    ENTRY_OPEN,
     MA5_SLOWDOWN_ALLOW_ONE,
     MA5_SLOWDOWN_ALLOW_PREVIOUS_DAY,
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
@@ -27,6 +28,7 @@ from app.domain.vwap_backtest import (
     is_upper_stall,
     is_ma5_slope_slowdown_excluded,
     is_ma25_slope_excluded,
+    requires_intraday_prices,
 )
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
 from app.usecases.run_vwap_backtest import (
@@ -90,6 +92,61 @@ class VwapCalculationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.validate()
 
+    def test_previous_close_without_breakdown_score_is_daily_only(self):
+        config = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "prev_close",
+            support_distance_max_atr=0.7,
+            breakdown_score_threshold=None,
+        )
+
+        self.assertFalse(requires_intraday_prices(config))
+
+    def test_intraday_entry_or_breakdown_score_requires_intraday_prices(self):
+        timed_entry = VwapBacktestConfig("2026-06-01", "2026-06-10", -5.0, 5.0, "11:00")
+        breakdown_score = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "prev_close",
+            breakdown_score_threshold=5,
+        )
+
+        self.assertTrue(requires_intraday_prices(timed_entry))
+        self.assertTrue(requires_intraday_prices(breakdown_score))
+
+    def test_open_entry_is_daily_only(self):
+        config = VwapBacktestConfig("2026-06-01", "2026-06-10", -5.0, 5.0, ENTRY_OPEN)
+
+        self.assertFalse(requires_intraday_prices(config))
+
+    def test_open_entry_rejects_intraday_only_conditions(self):
+        range_position = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            ENTRY_OPEN,
+            range_position_min_pct=40.0,
+        )
+        breakdown_score = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            ENTRY_OPEN,
+            breakdown_score_threshold=3,
+        )
+
+        with self.assertRaisesRegex(ValueError, "始値エントリーでは終端位置"):
+            range_position.validate()
+        with self.assertRaisesRegex(ValueError, "始値エントリーでは崩れスコア"):
+            breakdown_score.validate()
+
 class RangePositionTest(unittest.TestCase):
     def test_calculates_range_position_from_low_to_high(self):
         self.assertAlmostEqual(calculate_range_position_pct(90.0, 110.0, 100.0), 50.0)
@@ -132,13 +189,12 @@ class BreakdownScoreTest(unittest.TestCase):
                 high_price=108.0,
                 low_price=98.0,
                 close_price=99.0,
-                nearest_support_distance_atr=0.8,
             )
         )
 
-        self.assertEqual(score.total, 6)
+        self.assertEqual(score.total, 5)
         self.assertIn("VWAP未満", score.reasons)
-        self.assertIn("直下支持線が遠い", score.reasons)
+        self.assertNotIn("直下支持線が遠い", score.reasons)
         self.assertNotIn("25日線横ばい以下", score.reasons)
 
 
@@ -181,6 +237,115 @@ class SupportResistanceFilterTest(unittest.TestCase):
                 "app.usecases.run_vwap_backtest.fetch_intraday_prices", return_value={"1234": intraday}
             ):
                 return run_vwap_backtest(watchlist, config)
+
+    def test_daily_only_config_allows_start_before_intraday_limit(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize() - pd.Timedelta(days=120), periods=90)
+        signal_date = dates[70]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 110.0, "Low": 90.0, "Close": 102.0, "Volume": 1000.0},
+            index=dates,
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            3.0,
+            "prev_close",
+            breakdown_score_threshold=None,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices",
+                side_effect=AssertionError("5分足は取得しない"),
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertTrue(pd.isna(trades.iloc[0]["breakdown_score"]))
+        self.assertEqual(summary["entry_count"], 1)
+        self.assertFalse(summary["uses_intraday_prices"])
+
+    def test_open_entry_uses_next_business_day_daily_open_without_intraday_fetch(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize() - pd.Timedelta(days=120), periods=90)
+        signal_date = dates[70]
+        entry_date = dates[71]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 110.0, "Low": 90.0, "Close": 102.0, "Volume": 1000.0},
+            index=dates,
+        )
+        daily.loc[entry_date, "Open"] = 105.0
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            3.0,
+            ENTRY_OPEN,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices",
+                side_effect=AssertionError("5分足は取得しない"),
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["entry_date"], entry_date.strftime("%Y-%m-%d"))
+        self.assertEqual(trades.iloc[0]["entry_price"], 105.0)
+        self.assertEqual(trades.iloc[0]["entry_time"], ENTRY_OPEN)
+        self.assertFalse(summary["uses_intraday_prices"])
+
+    def test_intraday_config_keeps_sixty_day_start_limit(self):
+        old_date = pd.offsets.BDay().rollback(pd.Timestamp.now().normalize() - pd.Timedelta(days=90))
+        config = VwapBacktestConfig(
+            old_date.strftime("%Y-%m-%d"),
+            old_date.strftime("%Y-%m-%d"),
+            -1.0,
+            3.0,
+            "11:00",
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "5分足を使うため"):
+                run_vwap_backtest(watchlist, config)
+
+    def test_rejects_entry_when_nearest_support_is_far_as_single_filter(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=90)
+        signal_date = dates[70]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        daily.loc[signal_date, ["Open", "High", "Low", "Close"]] = [109.0, 111.0, 109.0, 110.0]
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -20.0,
+            20.0,
+            "prev_close",
+            support_distance_max_atr=0.7,
+            breakdown_score_threshold=None,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices",
+                side_effect=AssertionError("5分足は取得しない"),
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["直下支持線距離0.7ATR超"], 1)
+        self.assertEqual(summary["support_distance_max_atr"], 0.7)
 
 class Ma5SlopeSlowdownTest(unittest.TestCase):
     def test_reject_any_excludes_previous_or_three_days_ago_slowdown(self):
@@ -345,7 +510,36 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("| 5営業日 | 100.00% | 100.00% | 6.00% | -3.50% | 100.00% | 0.00% |", markdown)
         self.assertIn("| 10営業日後 | 1 | 100.00% |", markdown)
         self.assertIn("- VWAP: 単独除外なし（崩れスコアで判定）", markdown)
+        self.assertIn("- 直下支持線距離: 考慮しない", markdown)
         self.assertNotIn("合計損益", markdown)
+
+    def test_summary_markdown_marks_daily_only_vwap_as_not_evaluated(self):
+        config = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "prev_close",
+            breakdown_score_threshold=None,
+        )
+        summary = build_summary(pd.DataFrame(), config, stock_count=1, evaluated=0, skipped={})
+        markdown = _summary_markdown(summary)
+
+        self.assertIn("- VWAP: 判定なし（日足条件のみ）", markdown)
+
+    def test_summary_markdown_includes_support_distance_filter(self):
+        config = VwapBacktestConfig(
+            "2026-06-01",
+            "2026-06-10",
+            -5.0,
+            5.0,
+            "prev_close",
+            support_distance_max_atr=0.7,
+        )
+        summary = build_summary(pd.DataFrame(), config, stock_count=1, evaluated=0, skipped={})
+        markdown = _summary_markdown(summary)
+
+        self.assertIn("- 直下支持線距離: 0.7ATR超を除外", markdown)
 
     def test_report_paths_include_me25_condition_date_and_sequence(self):
         config = VwapBacktestConfig("2026-06-01", "2026-06-10", -1.0, 2.0, "11:00")

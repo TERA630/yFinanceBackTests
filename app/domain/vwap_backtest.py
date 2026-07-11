@@ -9,9 +9,11 @@ import pandas as pd
 
 
 ENTRY_PREV_CLOSE = "prev_close"
+ENTRY_OPEN = "open"
 ENTRY_1100 = "11:00"
 ENTRY_1400 = "14:00"
-ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_1100, ENTRY_1400)
+ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_OPEN, ENTRY_1100, ENTRY_1400)
+INTRADAY_ENTRY_TIMES = (ENTRY_1100, ENTRY_1400)
 HORIZONS = (1, 5, 10, 15)
 EXCURSION_WINDOWS = (5, 10, 15)
 MA5_SLOWDOWN_IGNORE = "ignore"
@@ -53,6 +55,7 @@ class A8BacktestConfig:
     ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
     ma25_negative_slope_policy: str = MA25_NEGATIVE_SLOPE_REJECT
     breakdown_score_threshold: Optional[int] = None
+    support_distance_max_atr: Optional[float] = None
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -63,12 +66,18 @@ class A8BacktestConfig:
             raise ValueError("25日乖離率の最低値は最高値より小さくしてください。")
         if self.entry_time not in ENTRY_TIMES:
             raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
+        if self.entry_time == ENTRY_OPEN and self.range_position_min_pct is not None:
+            raise ValueError("始値エントリーでは終端位置条件を使えません。")
+        if self.entry_time == ENTRY_OPEN and self.breakdown_score_threshold is not None:
+            raise ValueError("始値エントリーでは崩れスコア条件を使えません。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):
             raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
         if self.higher_high_exclude_count not in (0, 1, 2, 3):
             raise ValueError("高値更新条件は0～3で指定してください。")
         if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
             raise ValueError("終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
+        if self.support_distance_max_atr is not None and self.support_distance_max_atr not in (0.7, 1.0):
+            raise ValueError("直下支持線距離は0.7ATR、1.0ATR、または考慮なしで指定してください。")
         if not isinstance(self.require_ma5_slope_positive, bool):
             raise ValueError("5日線傾き条件は有効または無効で指定してください。")
         if self.ma5_slope_slowdown_policy not in MA5_SLOWDOWN_POLICIES:
@@ -78,8 +87,16 @@ class A8BacktestConfig:
         if self.breakdown_score_threshold is not None:
             if not isinstance(self.breakdown_score_threshold, int):
                 raise ValueError("崩れスコア除外閾値は整数で指定してください。")
-            if not 0 <= self.breakdown_score_threshold <= 6:
-                raise ValueError("崩れスコア除外閾値は0～6点で指定してください。")
+            if not 0 <= self.breakdown_score_threshold <= 5:
+                raise ValueError("崩れスコア除外閾値は0～5点で指定してください。")
+
+
+def requires_intraday_prices(config: A8BacktestConfig) -> bool:
+    return (
+        config.entry_time in INTRADAY_ENTRY_TIMES
+        or config.breakdown_score_threshold is not None
+        or config.require_vwap_confirmation
+    )
 
 
 # Compatibility alias for callers using the old name.
@@ -109,7 +126,6 @@ class BreakdownScoreInput:
     high_price: Optional[float]
     low_price: Optional[float]
     close_price: Optional[float]
-    nearest_support_distance_atr: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -231,10 +247,6 @@ def calculate_breakdown_score(inputs: BreakdownScoreInput) -> BreakdownScore:
     ):
         score += 1
         reasons.append("出来高増で陰線または上値失速")
-
-    if inputs.nearest_support_distance_atr is not None and inputs.nearest_support_distance_atr > 0.7:
-        score += 1
-        reasons.append("直下支持線が遠い")
 
     return BreakdownScore(total=score, reasons=tuple(reasons))
 

@@ -8,6 +8,8 @@ from pathlib import Path
 import pandas as pd
 
 from app.domain.vwap_backtest import (
+    ENTRY_OPEN,
+    ENTRY_PREV_CLOSE,
     EXCURSION_WINDOWS,
     HORIZONS,
     MA25_NEGATIVE_SLOPE_REJECT,
@@ -146,7 +148,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 直近3日の安値切り下げ回数: {int(row['lower_low_count_3d'])}回",
             f"- 直近3日の高値更新回数: {int(row.get('higher_high_count_3d', 0))}回",
             f"- 始値時点ATR14: {_price(row.get('atr14_open'))}",
-            f"- エントリー時刻: {_entry_label(row['entry_time'])}",
+            f"- エントリー条件: {_entry_label(row['entry_time'])}",
             f"- 買値: {_price(row['entry_price'])}",
             f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
             f"- 崩れスコア: {_score(row.get('breakdown_score'))}",
@@ -197,12 +199,13 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
         f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
         f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
-        "- VWAP: 単独除外なし（崩れスコアで判定）",
-        f"- エントリー時刻: {_entry_label(summary['entry_time'])}",
+        _vwap_condition(summary),
+        f"- エントリー条件: {_entry_label(summary['entry_time'])}",
         f"- 3日間の安値切り下げ: {_lower_low_condition(summary.get('lower_low_exclude_count'))}",
         f"- 3日間の高値更新条件: {summary.get('higher_high_exclude_count', 0)}回以上"
         if summary.get('higher_high_exclude_count', 0) > 0 else "- 3日間の高値更新条件: 考慮しない",
         f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
+        f"- 直下支持線距離: {_support_distance_condition(summary.get('support_distance_max_atr'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
         f"- 評価件数: {summary['evaluated_count']}",
         f"- エントリー件数: {summary['entry_count']}",
@@ -228,11 +231,19 @@ def _number_label(value) -> str:
 
 
 def _entry_label(value: str) -> str:
-    return "前日終値" if value == "prev_close" else value
+    labels = {
+        ENTRY_PREV_CLOSE: "日足:前日終値",
+        ENTRY_OPEN: "日足:翌営業日始値",
+    }
+    return labels.get(value, f"日中足:{value}")
 
 
 def _range_condition(value) -> str:
     return "考慮せず" if value is None or pd.isna(value) else f"{float(value):g}%以上"
+
+
+def _support_distance_condition(value) -> str:
+    return "考慮しない" if value is None or pd.isna(value) else f"{float(value):g}ATR超を除外"
 
 
 def _lower_low_condition(value) -> str:
@@ -257,6 +268,12 @@ def _ma25_negative_slope_label(value) -> str:
 
 def _breakdown_score_condition(value) -> str:
     return "考慮しない" if value is None or pd.isna(value) else f"{int(value)}点以上を除外"
+
+
+def _vwap_condition(summary: dict) -> str:
+    if summary.get("uses_intraday_prices", True):
+        return "- VWAP: 単独除外なし（崩れスコアで判定）"
+    return "- VWAP: 判定なし（日足条件のみ）"
 
 
 def _first_touch(value) -> str:

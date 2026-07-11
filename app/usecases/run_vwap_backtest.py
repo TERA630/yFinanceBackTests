@@ -14,6 +14,7 @@ from app.data.vwap_price_repository import (
 )
 from app.domain.vwap_backtest import (
     EXCURSION_WINDOWS,
+    ENTRY_OPEN,
     ENTRY_PREV_CLOSE,
     HORIZONS,
     A8BacktestConfig,
@@ -28,20 +29,26 @@ from app.domain.vwap_backtest import (
     MA25_NEGATIVE_SLOPE_REJECT,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
+    requires_intraday_prices,
 )
 from app.usecases.watchlist import load_watchlist_items
 
 
 def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.DataFrame, dict]:
     config.validate()
-    _validate_intraday_range(config)
+    needs_intraday = requires_intraday_prices(config)
+    _validate_price_data_range(config, needs_intraday)
     watchlist_items = load_watchlist_items(stock_md_path)
     watchlist = [(item.name, item.code) for item in watchlist_items]
 
     print("[1/3] 日足データ取得")
     daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
-    print("[2/3] 5分足データ取得")
-    intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
+    if needs_intraday:
+        print("[2/3] 5分足データ取得")
+        intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
+    else:
+        print("[2/3] 5分足データ取得なし（日足条件のみ）")
+        intraday_map = {}
     print("[3/3] A9r4バックテスト")
 
     records: List[dict] = []
@@ -86,8 +93,11 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
 
             if config.entry_time == ENTRY_PREV_CLOSE:
                 entry_date = signal_date
-                entry = intraday_entry(intraday, entry_date, "15:30")
                 entry_price = previous_close
+                entry = intraday_entry(intraday, entry_date, "15:30") if needs_intraday else None
+                if needs_intraday and entry is None:
+                    skipped["崩れスコア用の分足データなし"] += 1
+                    continue
                 vwap = None if entry is None else entry[1]
                 entry_ma25 = ma25
                 previous_ma25 = _number(daily["MA25"].iloc[daily_position - 1]) if daily_position > 0 else None
@@ -95,13 +105,42 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 previous_ma5 = _number(daily["MA5"].iloc[daily_position - 1]) if daily_position > 0 else None
                 entry_position = daily_position
                 support_row = row
-                breakdown_candle = _daily_candle(row)
-                breakdown_volume_ratio_20d = _daily_volume_ratio(row)
+                breakdown_candle = (
+                    _intraday_candle(intraday, entry_date, "15:30", entry_price)
+                    if needs_intraday
+                    else {"open": None, "high": None, "low": None, "close": None}
+                )
+                breakdown_volume_ratio_20d = (
+                    _intraday_volume_ratio(intraday, entry_date, "15:30", _number(row.get("VolumeAvg20Open")))
+                    if needs_intraday
+                    else None
+                )
                 range_position_pct = calculate_range_position_pct(
                     _number(row.get("Low")),
                     _number(row.get("High")),
                     entry_price,
                 )
+            elif config.entry_time == ENTRY_OPEN:
+                next_position = daily_position + 1
+                if next_position >= len(daily):
+                    skipped["翌営業日データなし"] += 1
+                    continue
+                entry_date = pd.Timestamp(daily.index[next_position])
+                entry_row = daily.iloc[next_position]
+                entry_price = _number(entry_row.get("Open"))
+                if entry_price is None:
+                    skipped["翌営業日始値データなし"] += 1
+                    continue
+                vwap = None
+                entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
+                previous_ma25 = ma25
+                entry_ma5 = _provisional_ma(daily, daily_position, entry_price, 5)
+                previous_ma5 = ma5
+                entry_position = next_position
+                support_row = entry_row
+                breakdown_candle = {"open": None, "high": None, "low": None, "close": None}
+                breakdown_volume_ratio_20d = None
+                range_position_pct = None
             else:
                 next_position = daily_position + 1
                 if next_position >= len(daily):
@@ -196,23 +235,33 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 continue
 
             nearest_support_distance_atr = _nearest_support_distance_atr(support_row, entry_price)
-            breakdown_score = calculate_breakdown_score(
-                BreakdownScoreInput(
-                    entry_price=entry_price,
-                    vwap=vwap,
-                    higher_low_count_3d=higher_low_count,
-                    higher_high_count_3d=higher_high_count,
-                    range_position_pct=range_position_pct,
-                    volume_ratio_20d=breakdown_volume_ratio_20d,
-                    open_price=breakdown_candle.get("open"),
-                    high_price=breakdown_candle.get("high"),
-                    low_price=breakdown_candle.get("low"),
-                    close_price=breakdown_candle.get("close"),
-                    nearest_support_distance_atr=nearest_support_distance_atr,
+            if config.support_distance_max_atr is not None:
+                if nearest_support_distance_atr is None:
+                    skipped["直下支持線距離を計算できない"] += 1
+                    continue
+                if nearest_support_distance_atr > config.support_distance_max_atr:
+                    skipped[f"直下支持線距離{config.support_distance_max_atr:g}ATR超"] += 1
+                    continue
+
+            breakdown_score = None
+            if needs_intraday:
+                breakdown_score = calculate_breakdown_score(
+                    BreakdownScoreInput(
+                        entry_price=entry_price,
+                        vwap=vwap,
+                        higher_low_count_3d=higher_low_count,
+                        higher_high_count_3d=higher_high_count,
+                        range_position_pct=range_position_pct,
+                        volume_ratio_20d=breakdown_volume_ratio_20d,
+                        open_price=breakdown_candle.get("open"),
+                        high_price=breakdown_candle.get("high"),
+                        low_price=breakdown_candle.get("low"),
+                        close_price=breakdown_candle.get("close"),
+                    )
                 )
-            )
             if (
                 config.breakdown_score_threshold is not None
+                and breakdown_score is not None
                 and breakdown_score.total >= config.breakdown_score_threshold
             ):
                 skipped[f"崩れスコア{config.breakdown_score_threshold}点以上"] += 1
@@ -237,8 +286,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
                 "breakdown_volume_ratio_20d": breakdown_volume_ratio_20d,
-                "breakdown_score": breakdown_score.total,
-                "breakdown_reasons": " / ".join(breakdown_score.reasons),
+                "breakdown_score": None if breakdown_score is None else breakdown_score.total,
+                "breakdown_reasons": "" if breakdown_score is None else " / ".join(breakdown_score.reasons),
                 "entry_ma5": entry_ma5,
                 "ma5_slope_pct": ma5_slope_pct,
                 "previous_ma5_slope_pct": previous_ma5_slope_pct,
@@ -275,10 +324,12 @@ def build_summary(
         "lower_low_exclude_count": config.lower_low_exclude_count,
         "higher_high_exclude_count": config.higher_high_exclude_count,
         "range_position_min_pct": config.range_position_min_pct,
+        "support_distance_max_atr": config.support_distance_max_atr,
         "require_ma5_slope_positive": config.require_ma5_slope_positive,
         "ma5_slope_slowdown_policy": config.ma5_slope_slowdown_policy,
         "ma25_negative_slope_policy": config.ma25_negative_slope_policy,
         "breakdown_score_threshold": config.breakdown_score_threshold,
+        "uses_intraday_prices": requires_intraday_prices(config),
         "stock_count": stock_count,
         "evaluated_count": evaluated,
         "entry_count": int(len(trades)),
@@ -404,23 +455,6 @@ def _ma_slope_pct_at(daily: pd.DataFrame, position: int, window: int):
     return (current / previous - 1.0) * 100.0
 
 
-def _daily_candle(row: pd.Series) -> dict[str, float | None]:
-    return {
-        "open": _number(row.get("Open")),
-        "high": _number(row.get("High")),
-        "low": _number(row.get("Low")),
-        "close": _number(row.get("Close")),
-    }
-
-
-def _daily_volume_ratio(row: pd.Series):
-    average = _number(row.get("VolumeAvg20Open"))
-    volume = _number(row.get("Volume"))
-    if average in (None, 0) or volume is None:
-        return None
-    return volume / average
-
-
 def _intraday_candle(
     intraday: pd.DataFrame,
     trade_date: pd.Timestamp,
@@ -485,12 +519,13 @@ def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:
     return pd.Timestamp(pd.offsets.BDay().rollforward(today - pd.Timedelta(days=59)))
 
 
-def _validate_intraday_range(config: A8BacktestConfig) -> None:
-    oldest = _oldest_intraday_start()
-    if pd.Timestamp(config.start_date) < oldest:
-        raise ValueError(
-            f"5分足を使うため、開始日は {oldest.strftime('%Y-%m-%d')} 以降にしてください。"
-        )
+def _validate_price_data_range(config: A8BacktestConfig, needs_intraday: bool) -> None:
+    if needs_intraday:
+        oldest = _oldest_intraday_start()
+        if pd.Timestamp(config.start_date) < oldest:
+            raise ValueError(
+                f"5分足を使うため、開始日は {oldest.strftime('%Y-%m-%d')} 以降にしてください。"
+            )
     if pd.Timestamp(config.end_date) > pd.Timestamp.now().normalize():
         raise ValueError("終了日に未来の日付は指定できません。")
 
