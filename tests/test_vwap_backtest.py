@@ -142,7 +142,7 @@ class VwapCalculationTest(unittest.TestCase):
             breakdown_score_threshold=3,
         )
 
-        with self.assertRaisesRegex(ValueError, "始値エントリーでは終端位置"):
+        with self.assertRaisesRegex(ValueError, "始値エントリーでは終値位置・終端位置"):
             range_position.validate()
         with self.assertRaisesRegex(ValueError, "始値エントリーでは崩れスコア"):
             breakdown_score.validate()
@@ -506,7 +506,7 @@ class SummaryTest(unittest.TestCase):
         config = VwapBacktestConfig("2026-06-01", "2026-06-10", -5.0, 5.0, "11:00")
         summary = build_summary(trades, config, stock_count=1, evaluated=1, skipped={})
         markdown = _summary_markdown(summary)
-        self.assertIn("# A9r4バックテスト サマリー", markdown)
+        self.assertIn("# A11バックテスト サマリー", markdown)
         self.assertIn("| 5営業日 | 100.00% | 100.00% | 6.00% | -3.50% | 100.00% | 0.00% |", markdown)
         self.assertIn("| 10営業日後 | 1 | 100.00% |", markdown)
         self.assertIn("- VWAP: 単独除外なし（崩れスコアで判定）", markdown)
@@ -552,10 +552,10 @@ class SummaryTest(unittest.TestCase):
             first_result.write_text("", encoding="utf-8")
             second_summary, second_result = _report_paths(out_dir, summary, "06-17")
 
-        self.assertEqual(first_summary.name, "bt_v9r4_ME25(-1,2)-06-17_summary-1.md")
-        self.assertEqual(first_result.name, "bt_v9r4_ME25(-1,2)-06-17_result-1.md")
-        self.assertEqual(second_summary.name, "bt_v9r4_ME25(-1,2)-06-17_summary-2.md")
-        self.assertEqual(second_result.name, "bt_v9r4_ME25(-1,2)-06-17_result-2.md")
+        self.assertEqual(first_summary.name, "bt_a11_ME25(-1,2)-06-17_summary-1.md")
+        self.assertEqual(first_result.name, "bt_a11_ME25(-1,2)-06-17_result-1.md")
+        self.assertEqual(second_summary.name, "bt_a11_ME25(-1,2)-06-17_summary-2.md")
+        self.assertEqual(second_result.name, "bt_a11_ME25(-1,2)-06-17_result-2.md")
 
     def test_result_markdown_shows_conditions_and_hides_entry_only_rows(self):
         trades = pd.DataFrame(
@@ -1230,6 +1230,34 @@ class BacktestUsecaseTest(unittest.TestCase):
         self.assertEqual(len(trades), 1)
         self.assertAlmostEqual(trades.iloc[0]["entry_range_position_pct"], 60.0)
         self.assertEqual(summary["range_position_min_pct"], 60.0)
+
+    def test_prev_close_range_position_skip_uses_close_position_label(self):
+        dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
+        signal_date = dates[28]
+        daily = pd.DataFrame(
+            {"Open": 100.0, "High": 110.0, "Low": 90.0, "Close": 100.0, "Volume": 1000.0},
+            index=dates,
+        )
+        config = VwapBacktestConfig(
+            signal_date.strftime("%Y-%m-%d"),
+            signal_date.strftime("%Y-%m-%d"),
+            -1.0,
+            1.0,
+            "prev_close",
+            range_position_min_pct=60.0,
+        )
+
+        with TemporaryDirectory() as tmp:
+            watchlist = Path(tmp) / "stocks.md"
+            watchlist.write_text("- テスト銘柄 (1234)\n", encoding="utf-8")
+            with patch("app.usecases.run_vwap_backtest.fetch_daily_prices", return_value={"1234": daily}), patch(
+                "app.usecases.run_vwap_backtest.fetch_intraday_prices",
+                side_effect=AssertionError("5分足は取得しない"),
+            ):
+                trades, summary = run_vwap_backtest(watchlist, config)
+
+        self.assertTrue(trades.empty)
+        self.assertEqual(summary["skipped"]["終値位置が条件未満"], 1)
 
 
 if __name__ == "__main__":

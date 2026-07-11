@@ -39,7 +39,7 @@ MA25_NEGATIVE_SLOPE_LABELS = {
 }
 
 
-def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
+def save_a11_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     report_date = datetime.now().strftime("%m-%d")
     summary_path, result_path = _report_paths(out_dir, summary, report_date)
@@ -48,27 +48,32 @@ def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tup
     return summary_path, result_path
 
 
+def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
+    """Compatibility alias for callers using the old A9r4 report name."""
+    return save_a11_reports(out_dir, trades, summary)
+
+
 def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for callers using the old A9r2 report name."""
-    return save_a9r4_reports(out_dir, trades, summary)
+    return save_a11_reports(out_dir, trades, summary)
 
 
 def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for callers using the former A8 report name."""
-    return save_a9r4_reports(out_dir, trades, summary)
+    return save_a11_reports(out_dir, trades, summary)
 
 
 def save_vwap_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
     """Compatibility alias for the former VWAP report writer."""
-    return save_a9r4_reports(out_dir, trades, summary)
+    return save_a11_reports(out_dir, trades, summary)
 
 
 def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path, Path]:
     condition = _filename_condition(summary)
     index = 1
     while True:
-        summary_path = out_dir / f"bt_v9r4_{condition}-{report_date}_summary-{index}.md"
-        result_path = out_dir / f"bt_v9r4_{condition}-{report_date}_result-{index}.md"
+        summary_path = out_dir / f"bt_a11_{condition}-{report_date}_summary-{index}.md"
+        result_path = out_dir / f"bt_a11_{condition}-{report_date}_result-{index}.md"
         if not summary_path.exists() and not result_path.exists():
             return summary_path, result_path
         index += 1
@@ -76,7 +81,7 @@ def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path,
 
 def _summary_markdown(summary: dict) -> str:
     lines = [
-        "# A9r4バックテスト サマリー",
+        "# A11バックテスト サマリー",
         "",
         "## 実行条件",
         "",
@@ -122,7 +127,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
     entry_only_count = _entry_only_count(trades)
     completed_trades = _completed_result_trades(trades)
     lines = [
-        "# A9r4バックテスト 個別結果",
+        "# A11バックテスト 個別結果",
         "",
         "## 実行条件",
         "",
@@ -150,7 +155,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
             f"- 始値時点ATR14: {_price(row.get('atr14_open'))}",
             f"- エントリー条件: {_entry_label(row['entry_time'])}",
             f"- 買値: {_price(row['entry_price'])}",
-            f"- 終端位置: {_percent(row.get('entry_range_position_pct'))}",
+            f"- {_range_position_label(row['entry_time'])}: {_percent(row.get('entry_range_position_pct'))}",
             f"- 崩れスコア: {_score(row.get('breakdown_score'))}",
             f"- 崩れ理由: {_text_or_na(row.get('breakdown_reasons'))}",
             f"- 出来高20日平均比: {_ratio(row.get('breakdown_volume_ratio_20d'))}",
@@ -204,7 +209,7 @@ def _condition_lines(summary: dict) -> list[str]:
         f"- 3日間の安値切り下げ: {_lower_low_condition(summary.get('lower_low_exclude_count'))}",
         f"- 3日間の高値更新条件: {summary.get('higher_high_exclude_count', 0)}回以上"
         if summary.get('higher_high_exclude_count', 0) > 0 else "- 3日間の高値更新条件: 考慮しない",
-        f"- 終端位置: {_range_condition(summary.get('range_position_min_pct'))}",
+        f"- {_range_position_label(summary['entry_time'])}: {_range_condition(summary.get('range_position_min_pct'))}",
         f"- 直下支持線距離: {_support_distance_condition(summary.get('support_distance_max_atr'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
         f"- 評価件数: {summary['evaluated_count']}",
@@ -240,6 +245,12 @@ def _entry_label(value: str) -> str:
 
 def _range_condition(value) -> str:
     return "考慮せず" if value is None or pd.isna(value) else f"{float(value):g}%以上"
+
+
+def _range_position_label(entry_time: str) -> str:
+    if entry_time in ("11:00", "14:00"):
+        return "終端位置"
+    return "終値位置"
 
 
 def _support_distance_condition(value) -> str:

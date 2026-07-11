@@ -1,4 +1,4 @@
-"""Single-window input form for the A9r4 backtest."""
+"""Single-window input form for the A11 backtest."""
 
 from __future__ import annotations
 
@@ -96,9 +96,9 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         else f"高値更新{config.higher_high_exclude_count}回以上"
     )
     range_label = (
-        "終端位置考慮せず"
+        f"{_range_position_label(config.entry_time)}考慮せず"
         if config.range_position_min_pct is None
-        else f"終端位置{config.range_position_min_pct:g}%以上"
+        else f"{_range_position_label(config.entry_time)}{config.range_position_min_pct:g}%以上"
     )
     support_label = (
         "支持線距離考慮なし"
@@ -138,13 +138,19 @@ def _entry_label(value: str) -> str:
     return labels.get(value, value)
 
 
+def _range_position_label(entry_time: str) -> str:
+    if entry_time in (ENTRY_1100, ENTRY_1400):
+        return "終端位置"
+    return "終値位置"
+
+
 def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     if tk is None or ttk is None or DateEntry is None:
         raise RuntimeError("tkinter と tkcalendar が必要です。")
 
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
-    win.title("A9r4 バックテスト条件設定")
+    win.title("A11 バックテスト条件設定")
     win.geometry("840x980")
     win.resizable(False, False)
 
@@ -255,14 +261,18 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=26,
     ).grid(row=0, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="終端位置").grid(row=1, column=0, sticky="w", padx=10, pady=6)
-    ttk.Combobox(
+    range_position_label_var = tk.StringVar(value="終端位置")
+    ttk.Label(exclusion_frame, textvariable=range_position_label_var).grid(
+        row=1, column=0, sticky="w", padx=10, pady=6
+    )
+    range_position_box = ttk.Combobox(
         exclusion_frame,
         textvariable=range_position_var,
         values=("考慮せず", "30%以上", "40%以上", "50%以上", "60%以上"),
         state="readonly",
         width=14,
-    ).grid(row=1, column=1, sticky="w", padx=10, pady=6)
+    )
+    range_position_box.grid(row=1, column=1, sticky="w", padx=10, pady=6)
 
     ttk.Label(exclusion_frame, text="3日間の高値更新条件").grid(row=2, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
@@ -311,13 +321,34 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     score_frame.columnconfigure(1, weight=1)
 
     ttk.Label(score_frame, text="崩れスコア除外").grid(row=0, column=0, sticky="w", padx=10, pady=6)
-    ttk.Combobox(
+    breakdown_score_box = ttk.Combobox(
         score_frame,
         textvariable=breakdown_score_var,
         values=tuple(BREAKDOWN_SCORE_VALUES.keys()),
         state="readonly",
         width=18,
-    ).grid(row=0, column=1, sticky="w", padx=10, pady=6)
+    )
+    breakdown_score_box.grid(row=0, column=1, sticky="w", padx=10, pady=6)
+
+    def refresh_entry_dependent_controls(*_args) -> None:
+        if entry_mode_var.get() == "intraday":
+            range_position_label_var.set("終端位置")
+            range_position_box.configure(state="readonly")
+            breakdown_score_box.configure(state="readonly")
+            return
+        range_position_label_var.set("終値位置")
+        if daily_entry_var.get() == "翌営業日始値":
+            range_position_var.set("考慮せず")
+            breakdown_score_var.set("考慮しない")
+            range_position_box.configure(state="disabled")
+            breakdown_score_box.configure(state="disabled")
+        else:
+            range_position_box.configure(state="readonly")
+            breakdown_score_box.configure(state="readonly")
+
+    entry_mode_var.trace_add("write", refresh_entry_dependent_controls)
+    daily_entry_var.trace_add("write", refresh_entry_dependent_controls)
+    refresh_entry_dependent_controls()
 
     help_var = tk.StringVar()
     help_label = ttk.Label(
@@ -438,7 +469,7 @@ def show_a8_completion(summary_path: Path, result_path: Path) -> None:
         return
     root = tk.Tk()
     root.withdraw()
-    messagebox.showinfo("完了", f"A9r4バックテストが完了しました。\n\n{summary_path}\n{result_path}")
+    messagebox.showinfo("完了", f"A11バックテストが完了しました。\n\n{summary_path}\n{result_path}")
     root.destroy()
 
 
@@ -451,7 +482,7 @@ def show_a8_batch_completion(
     root = tk.Tk()
     root.withdraw()
     lines = [
-        f"A9r4バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"
+        f"A11バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"
     ]
     for index, (summary_path, result_path) in enumerate(outputs, start=1):
         lines.append("")

@@ -67,7 +67,7 @@ class A8BacktestConfig:
         if self.entry_time not in ENTRY_TIMES:
             raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
         if self.entry_time == ENTRY_OPEN and self.range_position_min_pct is not None:
-            raise ValueError("始値エントリーでは終端位置条件を使えません。")
+            raise ValueError("始値エントリーでは終値位置・終端位置条件を使えません。")
         if self.entry_time == ENTRY_OPEN and self.breakdown_score_threshold is not None:
             raise ValueError("始値エントリーでは崩れスコア条件を使えません。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3):
@@ -75,7 +75,7 @@ class A8BacktestConfig:
         if self.higher_high_exclude_count not in (0, 1, 2, 3):
             raise ValueError("高値更新条件は0～3で指定してください。")
         if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
-            raise ValueError("終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
+            raise ValueError("終値位置・終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
         if self.support_distance_max_atr is not None and self.support_distance_max_atr not in (0.7, 1.0):
             raise ValueError("直下支持線距離は0.7ATR、1.0ATR、または考慮なしで指定してください。")
         if not isinstance(self.require_ma5_slope_positive, bool):

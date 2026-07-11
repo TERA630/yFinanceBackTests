@@ -137,6 +137,24 @@ class A8GuiSavedConditionTests(unittest.TestCase):
 
         self.assertIn("終端位置40%以上", summary)
 
+    def test_condition_summary_uses_close_position_for_daily_range_position(self):
+        summary = summarize_condition(
+            A8GuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                A8BacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -5.0,
+                    5.0,
+                    ENTRY_PREV_CLOSE,
+                    range_position_min_pct=40.0,
+                ),
+            )
+        )
+
+        self.assertIn("終値位置40%以上", summary)
+
     def test_condition_summary_includes_support_distance_filter(self):
         summary = summarize_condition(
             A8GuiInput(

@@ -49,7 +49,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     else:
         print("[2/3] 5分足データ取得なし（日足条件のみ）")
         intraday_map = {}
-    print("[3/3] A9r4バックテスト")
+    print("[3/3] A11バックテスト")
 
     records: List[dict] = []
     skipped = Counter()
@@ -174,11 +174,12 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 )
 
             if config.range_position_min_pct is not None:
+                range_position_label = _range_position_label(config.entry_time)
                 if range_position_pct is None:
-                    skipped["終端位置を計算できない"] += 1
+                    skipped[f"{range_position_label}を計算できない"] += 1
                     continue
                 if range_position_pct < config.range_position_min_pct:
-                    skipped["終端位置が条件未満"] += 1
+                    skipped[f"{range_position_label}が条件未満"] += 1
                     continue
 
             if entry_ma25 in (None, 0):
@@ -512,6 +513,10 @@ def _nearest_support_distance_atr(row: pd.Series, price: float):
         return None
     nearest = max(levels)
     return (price - nearest) / atr
+
+
+def _range_position_label(entry_time: str) -> str:
+    return "終端位置" if entry_time not in (ENTRY_PREV_CLOSE, ENTRY_OPEN) else "終値位置"
 
 
 def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:

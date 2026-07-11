@@ -1,6 +1,6 @@
 # VWAP維持・25日線基準バックテスト仕様書
 
-> この文書は旧VWAP単独版の履歴資料です。現在の正式仕様と起動方法は `docs/a8_backtest_spec.md` のA9r4仕様を参照してください。
+> この文書は旧VWAP単独版の履歴資料です。現在の正式仕様と起動方法は `docs/a8_backtest_spec.md` のA11仕様を参照してください。
 
 ## 1. 目的
 
@@ -11,7 +11,7 @@ yfinanceから取得した価格データを使い、監視銘柄について前
 ## 2. 起動方法
 
 ```powershell
-python backtest_a9r4.py
+python backtest_a11.py
 ```
 
 起動すると専用GUIを表示する。
