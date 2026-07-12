@@ -49,9 +49,8 @@ MA5_SLOWDOWN_LABELS = {
 MA5_SLOWDOWN_VALUES = {label: value for value, label in MA5_SLOWDOWN_LABELS.items()}
 LOWER_LOW_LABELS = {
     0: "考慮しない",
-    1: "3日のうち1回でも安値切下げ",
-    2: "3日のうち2回安値切下げ",
-    3: "3日連続安値切下げ",
+    2: "3日のうち2回切り下げ",
+    3: "3日連続切り下げ",
 }
 LOWER_LOW_VALUES = {label: value for value, label in LOWER_LOW_LABELS.items()}
 MA25_NEGATIVE_SLOPE_LABELS = {
@@ -67,13 +66,6 @@ BREAKDOWN_SCORE_VALUES = {
     "4点以上": 4,
     "5点以上": 5,
 }
-SUPPORT_DISTANCE_VALUES = {
-    "考慮しない": None,
-    "0.7ATR超を除外": 0.7,
-    "1.0ATR超を除外": 1.0,
-}
-
-
 @dataclass(frozen=True)
 class A8GuiInput:
     stock_file: Path
@@ -81,7 +73,7 @@ class A8GuiInput:
     config: A8BacktestConfig
 
 
-def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit: int = 5) -> None:
+def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit: int = 8) -> None:
     queue.append(gui_input)
     del queue[:-limit]
 
@@ -100,11 +92,6 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         if config.range_position_min_pct is None
         else f"{_range_position_label(config.entry_time)}{config.range_position_min_pct:g}%以上"
     )
-    support_label = (
-        "支持線距離考慮なし"
-        if config.support_distance_max_atr is None
-        else f"支持線距離{config.support_distance_max_atr:g}ATR以内"
-    )
     ma5_label = "5日線上向き" if config.require_ma5_slope_positive else "5日線条件なし"
     ma5_slowdown_label = MA5_SLOWDOWN_LABELS.get(config.ma5_slope_slowdown_policy, "考慮しない")
     ma25_slope_label = MA25_NEGATIVE_SLOPE_LABELS.get(config.ma25_negative_slope_policy, "傾き負を即除外")
@@ -116,7 +103,7 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
         f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
-        f"{support_label} / {ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
+        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
         f"{breakdown_label}"
     )
 
@@ -141,7 +128,7 @@ def _entry_label(value: str) -> str:
 def _range_position_label(entry_time: str) -> str:
     if entry_time in (ENTRY_1100, ENTRY_1400):
         return "終端位置"
-    return "終値位置"
+    return "終値"
 
 
 def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
@@ -151,14 +138,13 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A11 バックテスト条件設定")
-    win.geometry("840x980")
+    win.geometry("840x850")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
     frame.pack(fill=tk.BOTH, expand=True)
     remembered_watchlist = load_watchlist_path()
     stock_var = tk.StringVar(value=str(remembered_watchlist) if remembered_watchlist else "")
-    output_var = tk.StringVar(value=str(remembered_watchlist.parent) if remembered_watchlist else "")
     min_var = tk.StringVar(value="-5.0")
     max_var = tk.StringVar(value="5.0")
     entry_mode_var = tk.StringVar(value="intraday")
@@ -167,7 +153,6 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     lower_low_var = tk.StringVar(value=LOWER_LOW_LABELS[0])
     higher_high_var = tk.StringVar(value="考慮しない")
     range_position_var = tk.StringVar(value="考慮せず")
-    support_distance_var = tk.StringVar(value="考慮しない")
     require_ma5_slope_var = tk.BooleanVar(value=False)
     ma5_slowdown_var = tk.StringVar(value=MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
     ma25_negative_slope_var = tk.StringVar(value=MA25_NEGATIVE_SLOPE_LABELS[MA25_NEGATIVE_SLOPE_REJECT])
@@ -179,10 +164,10 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     start_entry.set_date(default_start.date())
     start_entry.grid(row=0, column=1, sticky="w")
 
-    ttk.Label(frame, text="終了日").grid(row=1, column=0, sticky="w", pady=6)
+    ttk.Label(frame, text="終了日").grid(row=0, column=2, sticky="w", padx=(24, 0), pady=6)
     end_entry = DateEntry(frame, width=14, date_pattern="yyyy-mm-dd", locale="ja_JP")
     end_entry.set_date(default_end.date())
-    end_entry.grid(row=1, column=1, sticky="w")
+    end_entry.grid(row=0, column=3, sticky="w")
 
     ttk.Label(frame, text="監視銘柄ファイル").grid(row=2, column=0, sticky="w", pady=6)
     ttk.Entry(frame, textvariable=stock_var, width=48).grid(row=2, column=1, sticky="w")
@@ -194,20 +179,8 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         )
         if path:
             stock_var.set(path)
-            if not output_var.get():
-                output_var.set(str(Path(path).parent))
 
     ttk.Button(frame, text="参照", command=browse_stock).grid(row=2, column=2, padx=(8, 0))
-
-    ttk.Label(frame, text="出力先フォルダ").grid(row=3, column=0, sticky="w", pady=6)
-    ttk.Entry(frame, textvariable=output_var, width=48).grid(row=3, column=1, sticky="w")
-
-    def browse_output() -> None:
-        path = filedialog.askdirectory(title="出力先フォルダを選択")
-        if path:
-            output_var.set(path)
-
-    ttk.Button(frame, text="参照", command=browse_output).grid(row=3, column=2, padx=(8, 0))
 
     ttk.Label(frame, text="25日乖離率 最低値 (%)").grid(row=4, column=0, sticky="w", pady=6)
     ttk.Entry(frame, textvariable=min_var, width=16).grid(row=4, column=1, sticky="w")
@@ -283,15 +256,6 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         width=14,
     ).grid(row=2, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="直下支持線距離").grid(row=3, column=0, sticky="w", padx=10, pady=6)
-    ttk.Combobox(
-        exclusion_frame,
-        textvariable=support_distance_var,
-        values=tuple(SUPPORT_DISTANCE_VALUES.keys()),
-        state="readonly",
-        width=18,
-    ).grid(row=3, column=1, sticky="w", padx=10, pady=6)
-
     ttk.Checkbutton(
         exclusion_frame,
         text="5日線傾き > 0 を条件にする",
@@ -336,30 +300,22 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             range_position_box.configure(state="readonly")
             breakdown_score_box.configure(state="readonly")
             return
-        range_position_label_var.set("終値位置")
+        range_position_label_var.set("終値")
         if daily_entry_var.get() == "翌営業日始値":
-            breakdown_score_var.set("考慮しない")
+            if breakdown_score_var.get() != "考慮しない":
+                breakdown_score_var.set("考慮しない")
             range_position_box.configure(state="readonly")
             breakdown_score_box.configure(state="disabled")
         else:
             range_position_box.configure(state="readonly")
             breakdown_score_box.configure(state="readonly")
+        if breakdown_score_var.get() == "考慮しない":
+            start_entry.set_date(pd.Timestamp(year=pd.Timestamp.now().year, month=1, day=4).date())
 
     entry_mode_var.trace_add("write", refresh_entry_dependent_controls)
     daily_entry_var.trace_add("write", refresh_entry_dependent_controls)
+    breakdown_score_var.trace_add("write", refresh_entry_dependent_controls)
     refresh_entry_dependent_controls()
-
-    help_var = tk.StringVar()
-    help_label = ttk.Label(
-        frame,
-        textvariable=help_var,
-        foreground="#555555",
-    )
-    help_label.grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 16))
-    help_var.set(
-        "崩れスコアは5分足を使って判定します。\n"
-        "日足エントリーかつ崩れスコア考慮なしの条件では、日足だけで判定します。"
-    )
 
     saved_queue: list[A8GuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
@@ -367,7 +323,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     ttk.Label(frame, text="保存済み条件").grid(row=10, column=0, sticky="nw", pady=(8, 4))
     queue_frame = ttk.Frame(frame)
     queue_frame.grid(row=10, column=1, columnspan=2, sticky="w", pady=(8, 4))
-    queue_list = tk.Listbox(queue_frame, width=78, height=5)
+    queue_list = tk.Listbox(queue_frame, width=78, height=8)
     queue_xscroll = ttk.Scrollbar(queue_frame, orient=tk.HORIZONTAL, command=queue_list.xview)
     queue_list.configure(xscrollcommand=queue_xscroll.set)
     queue_list.grid(row=0, column=0, sticky="w")
@@ -384,11 +340,9 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
 
     def build_input_from_form() -> A8GuiInput:
         stock_file = Path(stock_var.get().strip())
-        output_dir = Path(output_var.get().strip())
         if not stock_file.is_file():
             raise ValueError("監視銘柄ファイルを選択してください。")
-        if not output_var.get().strip():
-            raise ValueError("出力先フォルダを選択してください。")
+        output_dir = stock_file.parent
         if entry_mode_var.get() == "daily":
             entry_time = ENTRY_OPEN if daily_entry_var.get() == "翌営業日始値" else ENTRY_PREV_CLOSE
         else:
@@ -409,7 +363,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             lower_low_exclude_count=LOWER_LOW_VALUES[lower_low_var.get()],
             higher_high_exclude_count=higher_high_exclude_count,
             range_position_min_pct=range_position_min_pct,
-            support_distance_max_atr=SUPPORT_DISTANCE_VALUES[support_distance_var.get()],
+            support_distance_max_atr=None,
             require_ma5_slope_positive=require_ma5_slope_var.get(),
             ma5_slope_slowdown_policy=MA5_SLOWDOWN_VALUES[ma5_slowdown_var.get()],
             ma25_negative_slope_policy=MA25_NEGATIVE_SLOPE_VALUES[ma25_negative_slope_var.get()],
@@ -454,9 +408,11 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     buttons.grid(row=12, column=0, columnspan=3, pady=8)
     ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
-    ttk.Button(buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="キュークリア", width=14, command=clear_conditions).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="キャンセル", width=14, command=win.destroy).pack(side=tk.LEFT, padx=8)
+    ttk.Button(frame, text="連続実行", width=14, command=submit_queue).grid(
+        row=9, column=1, sticky="w", pady=(8, 0)
+    )
     if remembered_watchlist is None:
         win.after(100, browse_stock)
     win.mainloop()

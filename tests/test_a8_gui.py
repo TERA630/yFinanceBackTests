@@ -35,9 +35,9 @@ class A8GuiDateDefaultsTests(unittest.TestCase):
 
 
 class A8GuiSavedConditionTests(unittest.TestCase):
-    def test_saved_condition_queue_keeps_latest_five(self):
+    def test_saved_condition_queue_keeps_latest_eight(self):
         queue = []
-        for index in range(6):
+        for index in range(9):
             append_saved_condition(
                 queue,
                 A8GuiInput(
@@ -53,9 +53,9 @@ class A8GuiSavedConditionTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(len(queue), 5)
+        self.assertEqual(len(queue), 8)
         self.assertEqual(queue[0].stock_file, Path("stock_1.md"))
-        self.assertEqual(queue[-1].stock_file, Path("stock_5.md"))
+        self.assertEqual(queue[-1].stock_file, Path("stock_8.md"))
 
     def test_condition_summary_excludes_paths_and_dates(self):
         summary = summarize_condition(
