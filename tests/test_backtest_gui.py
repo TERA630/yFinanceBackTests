@@ -11,7 +11,13 @@ from app.domain.vwap_backtest import (
     ENTRY_PREV_CLOSE,
     MA5_SLOWDOWN_ALLOW_ONE,
 )
-from app.presentation.backtest_gui import BacktestGuiInput, append_saved_condition, default_date_range, summarize_condition
+from app.presentation.backtest_gui import (
+    BacktestGuiInput,
+    append_ma25_conditions,
+    append_saved_condition,
+    default_date_range,
+    summarize_condition,
+)
 
 
 class BacktestGuiDateDefaultsTests(unittest.TestCase):
@@ -56,6 +62,48 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
         self.assertEqual(len(queue), 8)
         self.assertEqual(queue[0].stock_file, Path("stock_1.md"))
         self.assertEqual(queue[-1].stock_file, Path("stock_8.md"))
+
+    def test_ma25_condition_assignment_adds_seven_ranges_with_same_entry_conditions(self):
+        queue = []
+        base = BacktestGuiInput(
+            Path("watchlist.md"),
+            Path("out"),
+            VwapBacktestConfig(
+                "2026-06-01",
+                "2026-06-10",
+                -5.0,
+                5.0,
+                ENTRY_PREV_CLOSE,
+                lower_low_exclude_count=2,
+                require_ma5_slope_positive=True,
+            ),
+        )
+
+        append_ma25_conditions(queue, base)
+
+        self.assertEqual(
+            [(item.config.dev25_min, item.config.dev25_max) for item in queue],
+            [(-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0)],
+        )
+        self.assertTrue(all(item.stock_file == base.stock_file for item in queue))
+        self.assertTrue(all(item.output_dir == base.output_dir for item in queue))
+        self.assertTrue(all(item.config.entry_time == ENTRY_PREV_CLOSE for item in queue))
+        self.assertTrue(all(item.config.lower_low_exclude_count == 2 for item in queue))
+        self.assertTrue(all(item.config.require_ma5_slope_positive for item in queue))
+
+    def test_ma25_condition_assignment_respects_queue_limit(self):
+        existing = BacktestGuiInput(
+            Path("existing.md"),
+            Path("."),
+            VwapBacktestConfig("2026-06-01", "2026-06-10", -4.0, -2.0, ENTRY_1100),
+        )
+        queue = [existing, existing]
+
+        append_ma25_conditions(queue, existing)
+
+        self.assertEqual(len(queue), 8)
+        self.assertIs(queue[0], existing)
+        self.assertEqual((queue[-1].config.dev25_min, queue[-1].config.dev25_max), (10.0, 12.0))
 
     def test_condition_summary_excludes_paths_and_dates(self):
         summary = summarize_condition(

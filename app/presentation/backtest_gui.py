@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -66,6 +66,9 @@ BREAKDOWN_SCORE_VALUES = {
     "4点以上": 4,
     "5点以上": 5,
 }
+MA25_DEVIATION_RANGES = ((-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0))
+
+
 @dataclass(frozen=True)
 class BacktestGuiInput:
     stock_file: Path
@@ -80,6 +83,22 @@ def append_saved_condition(
 ) -> None:
     queue.append(gui_input)
     del queue[:-limit]
+
+
+def append_ma25_conditions(
+    queue: list[BacktestGuiInput],
+    gui_input: BacktestGuiInput,
+    limit: int = 8,
+) -> None:
+    for dev25_min, dev25_max in MA25_DEVIATION_RANGES:
+        append_saved_condition(
+            queue,
+            replace(
+                gui_input,
+                config=replace(gui_input.config, dev25_min=dev25_min, dev25_max=dev25_max),
+            ),
+            limit,
+        )
 
 
 def summarize_condition(gui_input: BacktestGuiInput) -> str:
@@ -157,7 +176,7 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     stock_var = tk.StringVar(value=str(remembered_watchlist) if remembered_watchlist else "")
     min_var = tk.StringVar(value="-5.0")
     max_var = tk.StringVar(value="5.0")
-    entry_mode_var = tk.StringVar(value="intraday")
+    entry_mode_var = tk.StringVar(value="daily")
     daily_entry_var = tk.StringVar(value="翌営業日始値")
     intraday_entry_var = tk.StringVar(value=ENTRY_1100)
     lower_low_var = tk.StringVar(value=LOWER_LOW_LABELS[0])
@@ -403,6 +422,13 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
         saved_queue.clear()
         refresh_queue_list()
 
+    def assign_ma25_conditions() -> None:
+        try:
+            append_ma25_conditions(saved_queue, build_input_from_form())
+            refresh_queue_list()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("入力エラー", str(exc))
+
     def submit() -> None:
         try:
             result["value"] = [build_input_from_form()]
@@ -417,15 +443,19 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
         result["value"] = list(saved_queue)
         win.destroy()
 
+    queue_buttons = ttk.Frame(frame)
+    queue_buttons.grid(row=9, column=1, columnspan=2, sticky="w", pady=(8, 0))
+    ttk.Button(queue_buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=(0, 6))
+    ttk.Button(queue_buttons, text="連続実行", width=14, command=submit_queue).pack(side=tk.LEFT, padx=6)
+    ttk.Button(queue_buttons, text="MA25条件割当", width=14, command=assign_ma25_conditions).pack(
+        side=tk.LEFT, padx=(6, 10)
+    )
+    ttk.Button(queue_buttons, text="キュークリア", width=14, command=clear_conditions).pack(side=tk.LEFT, padx=6)
+
     buttons = ttk.Frame(frame)
     buttons.grid(row=12, column=0, columnspan=3, pady=8)
-    ttk.Button(buttons, text="条件保存", width=14, command=save_condition).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="実行", width=14, command=submit).pack(side=tk.LEFT, padx=8)
-    ttk.Button(buttons, text="キュークリア", width=14, command=clear_conditions).pack(side=tk.LEFT, padx=6)
     ttk.Button(buttons, text="キャンセル", width=14, command=win.destroy).pack(side=tk.LEFT, padx=8)
-    ttk.Button(frame, text="連続実行", width=14, command=submit_queue).grid(
-        row=9, column=1, sticky="w", pady=(8, 0)
-    )
     if remembered_watchlist is None:
         win.after(100, browse_stock)
     win.mainloop()
