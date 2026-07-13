@@ -17,7 +17,7 @@ from app.domain.vwap_backtest import (
     ENTRY_OPEN,
     ENTRY_PREV_CLOSE,
     HORIZONS,
-    A8BacktestConfig,
+    VwapBacktestConfig,
     BreakdownScoreInput,
     build_trade_metrics,
     calculate_breakdown_score,
@@ -31,10 +31,24 @@ from app.domain.vwap_backtest import (
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     requires_intraday_prices,
 )
+from app.domain.price_series import (
+    higher_high_count,
+    higher_low_count,
+    intraday_candle,
+    intraday_volume_ratio,
+    lower_low_count,
+    moving_average_slope_pct,
+    nearest_support_distance_atr,
+    prepare_daily_prices,
+    provisional_moving_average,
+)
 from app.usecases.watchlist import load_watchlist_items
 
 
-def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.DataFrame, dict]:
+def run_vwap_backtest(
+    stock_md_path: Path,
+    config: VwapBacktestConfig,
+) -> tuple[pd.DataFrame, dict]:
     config.validate()
     needs_intraday = requires_intraday_prices(config)
     _validate_price_data_range(config, needs_intraday)
@@ -58,7 +72,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
     for item in watchlist_items:
         name = item.name
         code = item.code
-        daily = _prepare_daily(daily_map.get(code, pd.DataFrame()))
+        daily = prepare_daily_prices(daily_map.get(code, pd.DataFrame()))
         intraday = intraday_map.get(code, pd.DataFrame())
         if daily.empty:
             skipped["日足データなし"] += 1
@@ -81,13 +95,13 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["25日乖離率が範囲外"] += 1
                 continue
 
-            lower_low_count = _lower_low_count(daily, daily_position)
-            higher_low_count = _higher_low_count(daily, daily_position)
-            if config.lower_low_exclude_count > 0 and lower_low_count >= config.lower_low_exclude_count:
+            lower_lows = lower_low_count(daily, daily_position)
+            higher_lows = higher_low_count(daily, daily_position)
+            if config.lower_low_exclude_count > 0 and lower_lows >= config.lower_low_exclude_count:
                 skipped["安値切り下げ回数が除外基準以上"] += 1
                 continue
-            higher_high_count = _higher_high_count(daily, daily_position)
-            if config.higher_high_exclude_count > 0 and higher_high_count < config.higher_high_exclude_count:
+            higher_highs = higher_high_count(daily, daily_position)
+            if config.higher_high_exclude_count > 0 and higher_highs < config.higher_high_exclude_count:
                 skipped["高値更新回数が必要回数未満"] += 1
                 continue
 
@@ -106,12 +120,12 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 entry_position = daily_position
                 support_row = row
                 breakdown_candle = (
-                    _intraday_candle(intraday, entry_date, "15:30", entry_price)
+                    intraday_candle(intraday, entry_date, "15:30", entry_price)
                     if needs_intraday
                     else {"open": None, "high": None, "low": None, "close": None}
                 )
                 breakdown_volume_ratio_20d = (
-                    _intraday_volume_ratio(intraday, entry_date, "15:30", _number(row.get("VolumeAvg20Open")))
+                    intraday_volume_ratio(intraday, entry_date, "15:30", _number(row.get("VolumeAvg20Open")))
                     if needs_intraday
                     else None
                 )
@@ -132,9 +146,9 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     skipped["翌営業日始値データなし"] += 1
                     continue
                 vwap = None
-                entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
+                entry_ma25 = provisional_moving_average(daily, daily_position, entry_price, 25)
                 previous_ma25 = ma25
-                entry_ma5 = _provisional_ma(daily, daily_position, entry_price, 5)
+                entry_ma5 = provisional_moving_average(daily, daily_position, entry_price, 5)
                 previous_ma5 = ma5
                 entry_position = next_position
                 support_row = entry_row
@@ -157,14 +171,14 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     skipped["指定時刻の分足データなし"] += 1
                     continue
                 entry_price, vwap = entry
-                entry_ma25 = _provisional_ma25(daily, daily_position, entry_price)
+                entry_ma25 = provisional_moving_average(daily, daily_position, entry_price, 25)
                 previous_ma25 = ma25
-                entry_ma5 = _provisional_ma(daily, daily_position, entry_price, 5)
+                entry_ma5 = provisional_moving_average(daily, daily_position, entry_price, 5)
                 previous_ma5 = ma5
                 entry_position = next_position
                 support_row = entry_row
-                breakdown_candle = _intraday_candle(intraday, entry_date, config.entry_time, entry_price)
-                breakdown_volume_ratio_20d = _intraday_volume_ratio(
+                breakdown_candle = intraday_candle(intraday, entry_date, config.entry_time, entry_price)
+                breakdown_volume_ratio_20d = intraday_volume_ratio(
                     intraday,
                     entry_date,
                     config.entry_time,
@@ -199,7 +213,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["25日線傾きを計算できない"] += 1
                 continue
             ma25_slope_pct = (entry_ma25 / previous_ma25 - 1.0) * 100.0
-            five_days_ago_ma25_slope_pct = _ma_slope_pct_at(daily, entry_position - 5, 25)
+            five_days_ago_ma25_slope_pct = moving_average_slope_pct(daily, entry_position - 5, 25)
             requires_ma25_slowdown = config.ma25_negative_slope_policy in (
                 MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
                 MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
@@ -228,8 +242,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 if ma5_slope_pct <= 0.0:
                     skipped["5日線が上向きでない"] += 1
                     continue
-            previous_ma5_slope_pct = _ma_slope_pct_at(daily, entry_position - 1, 5)
-            three_days_ago_ma5_slope_pct = _ma_slope_pct_at(daily, entry_position - 3, 5)
+            previous_ma5_slope_pct = moving_average_slope_pct(daily, entry_position - 1, 5)
+            three_days_ago_ma5_slope_pct = moving_average_slope_pct(daily, entry_position - 3, 5)
             if is_ma5_slope_slowdown_excluded(
                 ma5_slope_pct,
                 previous_ma5_slope_pct,
@@ -239,12 +253,12 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 skipped["5日線傾き鈍化"] += 1
                 continue
 
-            nearest_support_distance_atr = _nearest_support_distance_atr(support_row, entry_price)
+            support_distance_atr = nearest_support_distance_atr(support_row, entry_price)
             if config.support_distance_max_atr is not None:
-                if nearest_support_distance_atr is None:
+                if support_distance_atr is None:
                     skipped["直下支持線距離を計算できない"] += 1
                     continue
-                if nearest_support_distance_atr > config.support_distance_max_atr:
+                if support_distance_atr > config.support_distance_max_atr:
                     skipped[f"直下支持線距離{config.support_distance_max_atr:g}ATR超"] += 1
                     continue
 
@@ -254,8 +268,8 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                     BreakdownScoreInput(
                         entry_price=entry_price,
                         vwap=vwap,
-                        higher_low_count_3d=higher_low_count,
-                        higher_high_count_3d=higher_high_count,
+                        higher_low_count_3d=higher_lows,
+                        higher_high_count_3d=higher_highs,
                         range_position_pct=range_position_pct,
                         volume_ratio_20d=breakdown_volume_ratio_20d,
                         open_price=breakdown_candle.get("open"),
@@ -279,15 +293,14 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
                 "code": code,
                 "entry_time": config.entry_time,
                 "semiconductor_related": item.is_semiconductor_related,
-                "vwap_confirmation_required": False,
                 "previous_close": previous_close,
                 "previous_ma25": ma25,
                 "previous_dev25_pct": dev25_pct,
-                "lower_low_count_3d": lower_low_count,
-                "higher_low_count_3d": higher_low_count,
-                "higher_high_count_3d": higher_high_count,
+                "lower_low_count_3d": lower_lows,
+                "higher_low_count_3d": higher_lows,
+                "higher_high_count_3d": higher_highs,
                 "atr14_open": _number(row.get("ATR14Open")),
-                "nearest_support_distance_atr": nearest_support_distance_atr,
+                "nearest_support_distance_atr": support_distance_atr,
                 "entry_price": entry_price,
                 "entry_range_position_pct": range_position_pct,
                 "breakdown_volume_ratio_20d": breakdown_volume_ratio_20d,
@@ -314,7 +327,7 @@ def run_a8_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.D
 
 def build_summary(
     trades: pd.DataFrame,
-    config: A8BacktestConfig,
+    config: VwapBacktestConfig,
     stock_count: int,
     evaluated: int,
     skipped: Counter,
@@ -325,7 +338,6 @@ def build_summary(
         "dev25_min": config.dev25_min,
         "dev25_max": config.dev25_max,
         "entry_time": config.entry_time,
-        "require_vwap_confirmation": config.require_vwap_confirmation,
         "lower_low_exclude_count": config.lower_low_exclude_count,
         "higher_high_exclude_count": config.higher_high_exclude_count,
         "range_position_min_pct": config.range_position_min_pct,
@@ -373,150 +385,7 @@ def build_summary(
             None if decided.empty else float((decided == "minus_3pct").mean() * 100.0)
         )
 
-    # Compatibility keys retained for existing report consumers.
-    summary["completed_drawdown_5d"] = summary["completed_excursion_5d"]
-    summary["average_max_drawdown_5d_pct"] = summary["average_mae_5d_pct"]
-    summary["median_max_drawdown_5d_pct"] = summary["median_mae_5d_pct"]
     return summary
-
-
-def run_vwap_backtest(stock_md_path: Path, config: A8BacktestConfig) -> tuple[pd.DataFrame, dict]:
-    """Compatibility alias for the former VWAP-only entry point."""
-    return run_a8_backtest(stock_md_path, config)
-
-
-def _prepare_daily(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-    result = df.copy()
-    result.index = pd.DatetimeIndex(result.index).normalize()
-    result["MA5"] = pd.to_numeric(result["Close"], errors="coerce").rolling(5).mean()
-    result["MA25"] = pd.to_numeric(result["Close"], errors="coerce").rolling(25).mean()
-    close = pd.to_numeric(result["Close"], errors="coerce")
-    high = pd.to_numeric(result["High"], errors="coerce")
-    low = pd.to_numeric(result["Low"], errors="coerce")
-    result["MA25Open"] = close.rolling(25).mean().shift(1)
-    result["MA75Open"] = close.rolling(75).mean().shift(1)
-    result["Low20Open"] = low.rolling(20).min().shift(1)
-    result["Low60Open"] = low.rolling(60).min().shift(1)
-    result["High20Open"] = high.rolling(20).max().shift(1)
-    result["High60Open"] = high.rolling(60).max().shift(1)
-    result["VolumeAvg20Open"] = pd.to_numeric(result["Volume"], errors="coerce").rolling(20).mean().shift(1)
-    previous_close = close.shift(1)
-    true_range = pd.concat(
-        [
-            high - low,
-            (high - previous_close).abs(),
-            (low - previous_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    result["ATR14Open"] = true_range.rolling(14).mean().shift(1)
-    return result.sort_index()
-
-
-def _provisional_ma25(daily: pd.DataFrame, signal_position: int, entry_price: float):
-    return _provisional_ma(daily, signal_position, entry_price, 25)
-
-
-def _provisional_ma(daily: pd.DataFrame, signal_position: int, entry_price: float, window: int):
-    start = signal_position - (window - 2)
-    if start < 0:
-        return None
-    closes = pd.to_numeric(daily["Close"].iloc[start:signal_position + 1], errors="coerce").dropna()
-    if len(closes) != window - 1:
-        return None
-    return float((closes.sum() + entry_price) / float(window))
-
-
-def _lower_low_count(daily: pd.DataFrame, signal_position: int) -> int:
-    start = max(0, signal_position - 3)
-    lows = pd.to_numeric(daily["Low"].iloc[start:signal_position + 1], errors="coerce")
-    return int((lows.diff() < 0).iloc[-3:].fillna(False).sum())
-
-
-def _higher_high_count(daily: pd.DataFrame, signal_position: int) -> int:
-    start = max(0, signal_position - 3)
-    highs = pd.to_numeric(daily["High"].iloc[start:signal_position + 1], errors="coerce")
-    return int((highs.diff() > 0).iloc[-3:].fillna(False).sum())
-
-
-def _higher_low_count(daily: pd.DataFrame, signal_position: int) -> int:
-    start = max(0, signal_position - 3)
-    lows = pd.to_numeric(daily["Low"].iloc[start:signal_position + 1], errors="coerce")
-    return int((lows.diff() > 0).iloc[-3:].fillna(False).sum())
-
-
-def _ma_slope_pct_at(daily: pd.DataFrame, position: int, window: int):
-    if position <= 0 or position >= len(daily):
-        return None
-    column = f"MA{window}"
-    if column not in daily.columns:
-        return None
-    current = _number(daily[column].iloc[position])
-    previous = _number(daily[column].iloc[position - 1])
-    if current in (None, 0) or previous in (None, 0):
-        return None
-    return (current / previous - 1.0) * 100.0
-
-
-def _intraday_candle(
-    intraday: pd.DataFrame,
-    trade_date: pd.Timestamp,
-    cutoff: str,
-    entry_price: float,
-) -> dict[str, float | None]:
-    eligible = _eligible_intraday(intraday, trade_date, cutoff)
-    if eligible.empty:
-        return {"open": None, "high": None, "low": None, "close": entry_price}
-    open_source = eligible["Open"] if "Open" in eligible.columns else eligible["Close"]
-    return {
-        "open": _number(open_source.iloc[0]),
-        "high": _number(pd.to_numeric(eligible["High"], errors="coerce").max()),
-        "low": _number(pd.to_numeric(eligible["Low"], errors="coerce").min()),
-        "close": entry_price,
-    }
-
-
-def _intraday_volume_ratio(
-    intraday: pd.DataFrame,
-    trade_date: pd.Timestamp,
-    cutoff: str,
-    average_volume_20d,
-):
-    average = _number(average_volume_20d)
-    if average in (None, 0):
-        return None
-    eligible = _eligible_intraday(intraday, trade_date, cutoff)
-    if eligible.empty or "Volume" not in eligible.columns:
-        return None
-    volume = _number(pd.to_numeric(eligible["Volume"], errors="coerce").fillna(0.0).sum())
-    return None if volume is None else volume / average
-
-
-def _eligible_intraday(intraday: pd.DataFrame, trade_date: pd.Timestamp, cutoff: str) -> pd.DataFrame:
-    if intraday is None or intraday.empty:
-        return pd.DataFrame()
-    day = intraday.loc[intraday.index.normalize() == pd.Timestamp(trade_date).normalize()]
-    if day.empty:
-        return pd.DataFrame()
-    cutoff_time = pd.Timestamp(f"{pd.Timestamp(trade_date).date()} {cutoff}")
-    return day.loc[day.index < cutoff_time]
-
-
-def _nearest_support_distance_atr(row: pd.Series, price: float):
-    atr = _number(row.get("ATR14Open"))
-    if atr is None or atr <= 0 or price is None:
-        return None
-    levels = []
-    for column in ("MA25Open", "Low20Open", "Low60Open", "MA75Open"):
-        level = _number(row.get(column))
-        if level is not None and level < price:
-            levels.append(level)
-    if not levels:
-        return None
-    nearest = max(levels)
-    return (price - nearest) / atr
 
 
 def _range_position_label(entry_time: str) -> str:
@@ -528,7 +397,7 @@ def _oldest_intraday_start(now: pd.Timestamp | None = None) -> pd.Timestamp:
     return pd.Timestamp(pd.offsets.BDay().rollforward(today - pd.Timedelta(days=59)))
 
 
-def _validate_price_data_range(config: A8BacktestConfig, needs_intraday: bool) -> None:
+def _validate_price_data_range(config: VwapBacktestConfig, needs_intraday: bool) -> None:
     if needs_intraday:
         oldest = _oldest_intraday_start()
         if pd.Timestamp(config.start_date) < oldest:

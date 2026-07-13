@@ -41,7 +41,7 @@ MA25_NEGATIVE_SLOPE_POLICIES = (
 
 
 @dataclass(frozen=True)
-class A8BacktestConfig:
+class VwapBacktestConfig:
     start_date: str
     end_date: str
     dev25_min: float
@@ -49,7 +49,6 @@ class A8BacktestConfig:
     entry_time: str
     lower_low_exclude_count: int = 0
     higher_high_exclude_count: int = 0
-    require_vwap_confirmation: bool = False
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
     ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
@@ -89,27 +88,11 @@ class A8BacktestConfig:
                 raise ValueError("崩れスコア除外閾値は0～5点で指定してください。")
 
 
-def requires_intraday_prices(config: A8BacktestConfig) -> bool:
+def requires_intraday_prices(config: VwapBacktestConfig) -> bool:
     return (
         config.entry_time in INTRADAY_ENTRY_TIMES
         or config.breakdown_score_threshold is not None
-        or config.require_vwap_confirmation
     )
-
-
-# Compatibility alias for callers using the old name.
-VwapBacktestConfig = A8BacktestConfig
-
-
-@dataclass(frozen=True)
-class EntryCandidate:
-    signal_date: pd.Timestamp
-    entry_date: pd.Timestamp
-    previous_close: float
-    ma25: float
-    dev25_pct: float
-    entry_price: float
-    vwap: float
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""Local persistence for A8 GUI settings."""
+"""Persistence for local GUI preferences."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 
-SETTINGS_PATH = Path(__file__).resolve().parents[2] / ".a8_settings.json"
+SETTINGS_PATH = Path(__file__).resolve().parents[2] / ".backtest_settings.json"
 
 
 def load_watchlist_path(settings_path: Path = SETTINGS_PATH) -> Optional[Path]:

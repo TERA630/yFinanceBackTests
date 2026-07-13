@@ -30,10 +30,9 @@ from app.domain.vwap_backtest import (
     is_ma25_slope_excluded,
     requires_intraday_prices,
 )
+from app.domain.price_series import higher_high_count, lower_low_count
 from app.output.markdown_writer import _report_paths, _result_markdown, _summary_markdown
 from app.usecases.run_vwap_backtest import (
-    _higher_high_count,
-    _lower_low_count,
     build_summary,
     run_vwap_backtest,
 )
@@ -68,14 +67,13 @@ class VwapCalculationTest(unittest.TestCase):
         self.assertEqual(price, 99.0)
         self.assertAlmostEqual(vwap, 99.0)
 
-    def test_config_allows_previous_close_without_vwap_confirmation(self):
+    def test_config_allows_previous_close(self):
         config = VwapBacktestConfig(
             "2026-06-01",
             "2026-06-10",
             -5.0,
             5.0,
             "prev_close",
-            require_vwap_confirmation=False,
         )
 
         config.validate()
@@ -217,7 +215,6 @@ class SupportResistanceFilterTest(unittest.TestCase):
             -5.0,
             5.0,
             "11:00",
-            require_vwap_confirmation=False,
             **config_options,
         )
         with TemporaryDirectory() as tmp:
@@ -503,8 +500,8 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(summary["win_rate_10d_pct"], 50.0)
         self.assertEqual(summary["completed_15d"], 1)
         self.assertEqual(summary["win_rate_15d_pct"], 100.0)
-        self.assertEqual(summary["average_max_drawdown_5d_pct"], -3.0)
-        self.assertEqual(summary["median_max_drawdown_5d_pct"], -3.0)
+        self.assertEqual(summary["average_mae_5d_pct"], -3.0)
+        self.assertEqual(summary["median_mae_5d_pct"], -3.0)
         self.assertAlmostEqual(summary["adverse_3pct_rate_5d_pct"], 200.0 / 3.0)
         self.assertAlmostEqual(summary["reach_5pct_rate_5d_pct"], 200.0 / 3.0)
         self.assertEqual(summary["first_reach_5pct_rate_5d_pct"], 50.0)
@@ -564,7 +561,7 @@ class SummaryTest(unittest.TestCase):
 
         self.assertIn("- 直下支持線距離: 0.7ATR超を除外", markdown)
 
-    def test_report_paths_include_me25_condition_date_and_sequence(self):
+    def test_report_paths_include_ma25_condition_date_and_sequence(self):
         config = VwapBacktestConfig("2026-06-01", "2026-06-10", -1.0, 2.0, "11:00")
         summary = build_summary(pd.DataFrame(), config, stock_count=1, evaluated=0, skipped={})
 
@@ -575,10 +572,10 @@ class SummaryTest(unittest.TestCase):
             first_result.write_text("", encoding="utf-8")
             second_summary, second_result = _report_paths(out_dir, summary, "06-17")
 
-        self.assertEqual(first_summary.name, "bt_a11_ME25(-1,2)-06-17_summary-1.md")
-        self.assertEqual(first_result.name, "bt_a11_ME25(-1,2)-06-17_result-1.md")
-        self.assertEqual(second_summary.name, "bt_a11_ME25(-1,2)-06-17_summary-2.md")
-        self.assertEqual(second_result.name, "bt_a11_ME25(-1,2)-06-17_result-2.md")
+        self.assertEqual(first_summary.name, "bt11_MA25(-1,2)-06-17_summary-1.md")
+        self.assertEqual(first_result.name, "bt11_MA25(-1,2)-06-17_result-1.md")
+        self.assertEqual(second_summary.name, "bt11_MA25(-1,2)-06-17_summary-2.md")
+        self.assertEqual(second_result.name, "bt11_MA25(-1,2)-06-17_result-2.md")
 
     def test_result_markdown_shows_conditions_and_hides_entry_only_rows(self):
         trades = pd.DataFrame(
@@ -589,7 +586,6 @@ class SummaryTest(unittest.TestCase):
                     "name": "表示銘柄",
                     "code": "1111",
                     "entry_time": "11:00",
-                    "vwap_confirmation_required": True,
                     "previous_close": 100.0,
                     "previous_ma25": 100.0,
                     "previous_dev25_pct": 0.0,
@@ -660,13 +656,13 @@ class SummaryTest(unittest.TestCase):
 class LowerLowTest(unittest.TestCase):
     def test_counts_lower_lows_over_the_latest_three_comparisons(self):
         daily = pd.DataFrame({"Low": [100.0, 99.0, 101.0, 98.0]})
-        self.assertEqual(_lower_low_count(daily, 3), 2)
+        self.assertEqual(lower_low_count(daily, 3), 2)
 
 
 class HigherHighTest(unittest.TestCase):
     def test_counts_higher_highs_over_the_latest_three_comparisons(self):
         daily = pd.DataFrame({"High": [100.0, 101.0, 99.0, 102.0]})
-        self.assertEqual(_higher_high_count(daily, 3), 2)
+        self.assertEqual(higher_high_count(daily, 3), 2)
 
 
 class YfinanceCacheTest(unittest.TestCase):
@@ -1020,7 +1016,7 @@ class BacktestUsecaseTest(unittest.TestCase):
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["崩れスコア1点以上"], 1)
 
-    def test_rejects_entry_when_higher_high_count_is_below_required_count(self):
+    def test_rejects_entry_whenhigher_high_count_is_below_required_count(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
         signal_date = dates[28]
         entry_date = dates[29]
@@ -1054,7 +1050,7 @@ class BacktestUsecaseTest(unittest.TestCase):
         self.assertTrue(trades.empty)
         self.assertEqual(summary["skipped"]["高値更新回数が必要回数未満"], 1)
 
-    def test_accepts_entry_when_higher_high_count_meets_required_count(self):
+    def test_accepts_entry_whenhigher_high_count_meets_required_count(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
         signal_date = dates[28]
         entry_date = dates[29]
@@ -1089,7 +1085,7 @@ class BacktestUsecaseTest(unittest.TestCase):
         self.assertEqual(trades.iloc[0]["higher_high_count_3d"], 2)
         self.assertEqual(summary["higher_high_exclude_count"], 2)
 
-    def test_enters_at_selected_time_without_vwap_confirmation(self):
+    def test_enters_at_selected_time(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
         signal_date = dates[28]
         entry_date = dates[29]
@@ -1107,7 +1103,6 @@ class BacktestUsecaseTest(unittest.TestCase):
             -1.0,
             1.0,
             "11:00",
-            require_vwap_confirmation=False,
         )
 
         with TemporaryDirectory() as tmp:
@@ -1120,11 +1115,9 @@ class BacktestUsecaseTest(unittest.TestCase):
 
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades.iloc[0]["entry_price"], 100.0)
-        self.assertFalse(trades.iloc[0]["vwap_confirmation_required"])
         self.assertEqual(summary["entry_count"], 1)
-        self.assertFalse(summary["require_vwap_confirmation"])
 
-    def test_enters_without_calculable_vwap_when_confirmation_is_off(self):
+    def test_enters_without_calculable_vwap(self):
         dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=50)
         signal_date = dates[28]
         entry_date = dates[29]
@@ -1142,7 +1135,6 @@ class BacktestUsecaseTest(unittest.TestCase):
             -1.0,
             1.0,
             "11:00",
-            require_vwap_confirmation=False,
         )
 
         with TemporaryDirectory() as tmp:

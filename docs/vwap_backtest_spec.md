@@ -132,13 +132,15 @@ GUIの開始日・終了日は「25日乖離率を判定する日」の範囲で
 ## 11. モジュール構成
 
 ```text
-backtest_a8.py
+backtest_a11.py
 app/
-  vwap_main.py
-  presentation/vwap_gui.py
+  a11_main.py
+  presentation/backtest_gui.py
   usecases/run_vwap_backtest.py
   domain/vwap_backtest.py
+  domain/price_series.py
   data/vwap_price_repository.py
+  data/settings_store.py
   output/markdown_writer.py
 ```
 

@@ -3,10 +3,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from app.presentation.a8_settings import load_watchlist_path, save_watchlist_path
+from app.data.settings_store import load_watchlist_path, save_watchlist_path
 
 
-class A8SettingsTests(unittest.TestCase):
+class SettingsStoreTests(unittest.TestCase):
     def test_round_trips_existing_watchlist_path(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

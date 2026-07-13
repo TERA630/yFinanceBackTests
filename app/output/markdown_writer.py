@@ -48,32 +48,12 @@ def save_a11_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tupl
     return summary_path, result_path
 
 
-def save_a9r4_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
-    """Compatibility alias for callers using the old A9r4 report name."""
-    return save_a11_reports(out_dir, trades, summary)
-
-
-def save_a9r2_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
-    """Compatibility alias for callers using the old A9r2 report name."""
-    return save_a11_reports(out_dir, trades, summary)
-
-
-def save_a8_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
-    """Compatibility alias for callers using the former A8 report name."""
-    return save_a11_reports(out_dir, trades, summary)
-
-
-def save_vwap_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tuple[Path, Path]:
-    """Compatibility alias for the former VWAP report writer."""
-    return save_a11_reports(out_dir, trades, summary)
-
-
 def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path, Path]:
     condition = _filename_condition(summary)
     index = 1
     while True:
-        summary_path = out_dir / f"bt_a11_{condition}-{report_date}_summary-{index}.md"
-        result_path = out_dir / f"bt_a11_{condition}-{report_date}_result-{index}.md"
+        summary_path = out_dir / f"bt11_{condition}-{report_date}_summary-{index}.md"
+        result_path = out_dir / f"bt11_{condition}-{report_date}_result-{index}.md"
         if not summary_path.exists() and not result_path.exists():
             return summary_path, result_path
         index += 1
@@ -228,7 +208,7 @@ def _entry_only_count(trades: pd.DataFrame) -> int:
 
 
 def _filename_condition(summary: dict) -> str:
-    return f"ME25({_number_label(summary['dev25_min'])},{_number_label(summary['dev25_max'])})"
+    return f"MA25({_number_label(summary['dev25_min'])},{_number_label(summary['dev25_max'])})"
 
 
 def _number_label(value) -> str:

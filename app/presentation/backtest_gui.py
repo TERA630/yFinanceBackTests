@@ -20,7 +20,7 @@ except Exception:
     DateEntry = None
 
 from app.domain.vwap_backtest import (
-    A8BacktestConfig,
+    VwapBacktestConfig,
     ENTRY_1100,
     ENTRY_1400,
     ENTRY_OPEN,
@@ -36,7 +36,7 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_REJECT_ANY,
     requires_intraday_prices,
 )
-from app.presentation.a8_settings import load_watchlist_path, save_watchlist_path
+from app.data.settings_store import load_watchlist_path, save_watchlist_path
 
 
 MA5_SLOWDOWN_LABELS = {
@@ -49,8 +49,8 @@ MA5_SLOWDOWN_LABELS = {
 MA5_SLOWDOWN_VALUES = {label: value for value, label in MA5_SLOWDOWN_LABELS.items()}
 LOWER_LOW_LABELS = {
     0: "考慮しない",
-    2: "3日のうち2回切り下げ",
-    3: "3日連続切り下げ",
+    2: "3日のうち2回安値切下げ",
+    3: "3日連続安値切下げ",
 }
 LOWER_LOW_VALUES = {label: value for value, label in LOWER_LOW_LABELS.items()}
 MA25_NEGATIVE_SLOPE_LABELS = {
@@ -67,18 +67,22 @@ BREAKDOWN_SCORE_VALUES = {
     "5点以上": 5,
 }
 @dataclass(frozen=True)
-class A8GuiInput:
+class BacktestGuiInput:
     stock_file: Path
     output_dir: Path
-    config: A8BacktestConfig
+    config: VwapBacktestConfig
 
 
-def append_saved_condition(queue: list[A8GuiInput], gui_input: A8GuiInput, limit: int = 8) -> None:
+def append_saved_condition(
+    queue: list[BacktestGuiInput],
+    gui_input: BacktestGuiInput,
+    limit: int = 8,
+) -> None:
     queue.append(gui_input)
     del queue[:-limit]
 
 
-def summarize_condition(gui_input: A8GuiInput) -> str:
+def summarize_condition(gui_input: BacktestGuiInput) -> str:
     config = gui_input.config
     entry_label = _entry_label(config.entry_time)
     lower_low_label = f"安値切下げ:{LOWER_LOW_LABELS.get(config.lower_low_exclude_count, '考慮しない')}"
@@ -100,10 +104,16 @@ def summarize_condition(gui_input: A8GuiInput) -> str:
         if config.breakdown_score_threshold is None
         else f"崩れスコア{config.breakdown_score_threshold}点以上除外"
     )
+    support_label = (
+        "支持線距離考慮なし"
+        if config.support_distance_max_atr is None
+        else f"支持線距離{config.support_distance_max_atr:g}ATR以内"
+    )
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
         f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
-        f"{ma5_label} / 5日線鈍化:{ma5_slowdown_label} / 25日線傾き:{ma25_slope_label} / "
+        f"{support_label} / {ma5_label} / 5日線鈍化:{ma5_slowdown_label} / "
+        f"25日線傾き:{ma25_slope_label} / "
         f"{breakdown_label}"
     )
 
@@ -128,17 +138,17 @@ def _entry_label(value: str) -> str:
 def _range_position_label(entry_time: str) -> str:
     if entry_time in (ENTRY_1100, ENTRY_1400):
         return "終端位置"
-    return "終値"
+    return "終値位置"
 
 
-def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
+def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     if tk is None or ttk is None or DateEntry is None:
         raise RuntimeError("tkinter と tkcalendar が必要です。")
 
-    result: dict[str, Optional[list[A8GuiInput]]] = {"value": None}
+    result: dict[str, Optional[list[BacktestGuiInput]]] = {"value": None}
     win = tk.Tk()
     win.title("A11 バックテスト条件設定")
-    win.geometry("840x850")
+    win.geometry("760x850")
     win.resizable(False, False)
 
     frame = ttk.Frame(win, padding=18)
@@ -159,13 +169,16 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     breakdown_score_var = tk.StringVar(value="5点以上")
     default_start, default_end = default_date_range()
 
-    ttk.Label(frame, text="開始日").grid(row=0, column=0, sticky="w", pady=6)
-    start_entry = DateEntry(frame, width=14, date_pattern="yyyy-mm-dd", locale="ja_JP")
+    date_frame = ttk.Frame(frame)
+    date_frame.grid(row=0, column=0, columnspan=3, sticky="w", pady=6)
+
+    ttk.Label(date_frame, text="開始日").grid(row=0, column=0, sticky="w")
+    start_entry = DateEntry(date_frame, width=14, date_pattern="yyyy-mm-dd", locale="ja_JP")
     start_entry.set_date(default_start.date())
     start_entry.grid(row=0, column=1, sticky="w")
 
-    ttk.Label(frame, text="終了日").grid(row=0, column=2, sticky="w", padx=(24, 0), pady=6)
-    end_entry = DateEntry(frame, width=14, date_pattern="yyyy-mm-dd", locale="ja_JP")
+    ttk.Label(date_frame, text="終了日").grid(row=0, column=2, sticky="w", padx=(16, 0))
+    end_entry = DateEntry(date_frame, width=14, date_pattern="yyyy-mm-dd", locale="ja_JP")
     end_entry.set_date(default_end.date())
     end_entry.grid(row=0, column=3, sticky="w")
 
@@ -317,7 +330,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     breakdown_score_var.trace_add("write", refresh_entry_dependent_controls)
     refresh_entry_dependent_controls()
 
-    saved_queue: list[A8GuiInput] = []
+    saved_queue: list[BacktestGuiInput] = []
     saved_count_var = tk.StringVar(value="保存済み条件: 0件")
 
     ttk.Label(frame, text="保存済み条件").grid(row=10, column=0, sticky="nw", pady=(8, 4))
@@ -338,7 +351,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
             queue_list.insert(tk.END, f"{index}. {summarize_condition(gui_input)}")
         saved_count_var.set(f"保存済み条件: {len(saved_queue)}件")
 
-    def build_input_from_form() -> A8GuiInput:
+    def build_input_from_form() -> BacktestGuiInput:
         stock_file = Path(stock_var.get().strip())
         if not stock_file.is_file():
             raise ValueError("監視銘柄ファイルを選択してください。")
@@ -354,7 +367,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         higher_high_exclude_count = (
             0 if higher_high_var.get() == "考慮しない" else int(higher_high_var.get().removesuffix("以上").removesuffix("回"))
         )
-        config = A8BacktestConfig(
+        config = VwapBacktestConfig(
             start_date=start_entry.get_date().strftime("%Y-%m-%d"),
             end_date=end_entry.get_date().strftime("%Y-%m-%d"),
             dev25_min=float(min_var.get()),
@@ -377,7 +390,7 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
         if pd.Timestamp(config.end_date) > pd.Timestamp.now().normalize():
             raise ValueError("終了日に未来の日付は指定できません。")
         save_watchlist_path(stock_file)
-        return A8GuiInput(stock_file, output_dir, config)
+        return BacktestGuiInput(stock_file, output_dir, config)
 
     def save_condition() -> None:
         try:
@@ -419,18 +432,9 @@ def request_a8_backtest_input() -> Optional[list[A8GuiInput]]:
     return result["value"]
 
 
-def show_a8_completion(summary_path: Path, result_path: Path) -> None:
-    if tk is None or messagebox is None:
-        return
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showinfo("完了", f"A11バックテストが完了しました。\n\n{summary_path}\n{result_path}")
-    root.destroy()
-
-
-def show_a8_batch_completion(
+def show_batch_completion(
     outputs: Sequence[tuple[Path, Path]],
-    errors: Sequence[tuple[A8GuiInput, Exception]],
+    errors: Sequence[tuple[BacktestGuiInput, Exception]],
 ) -> None:
     if tk is None or messagebox is None:
         return

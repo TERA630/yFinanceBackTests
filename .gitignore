@@ -206,6 +206,7 @@ tempCodeRunnerFile.py
 
 # local GUI settings / cache
 .a8_settings.json
+.backtest_settings.json
 .yfcache/
 
 # Ruff stuff:

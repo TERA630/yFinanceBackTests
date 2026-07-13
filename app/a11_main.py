@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from app.output.markdown_writer import save_a11_reports
-from app.presentation.a8_gui import request_a8_backtest_input, show_a8_batch_completion
-from app.usecases.run_vwap_backtest import run_a8_backtest
+from app.presentation.backtest_gui import request_backtest_inputs, show_batch_completion
+from app.usecases.run_vwap_backtest import run_vwap_backtest
 
 
 def main() -> None:
-    inputs = request_a8_backtest_input()
+    inputs = request_backtest_inputs()
     if inputs is None:
         return
 
@@ -16,7 +16,7 @@ def main() -> None:
     errors = []
     for gui_input in inputs:
         try:
-            trades, summary = run_a8_backtest(gui_input.stock_file, gui_input.config)
+            trades, summary = run_vwap_backtest(gui_input.stock_file, gui_input.config)
             summary_path, result_path = save_a11_reports(gui_input.output_dir, trades, summary)
             outputs.append((summary_path, result_path))
         except Exception as exc:
@@ -25,4 +25,4 @@ def main() -> None:
     for summary_path, result_path in outputs:
         print(f"summary: {summary_path}")
         print(f"results: {result_path}")
-    show_a8_batch_completion(outputs, errors)
+    show_batch_completion(outputs, errors)
