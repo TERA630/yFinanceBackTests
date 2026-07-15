@@ -66,6 +66,14 @@ def higher_high_count(daily: pd.DataFrame, signal_position: int) -> int:
     return _direction_count(daily["High"], signal_position, decreasing=False)
 
 
+def latest_day_updates_high(daily: pd.DataFrame, signal_position: int) -> bool:
+    if signal_position <= 0 or signal_position >= len(daily):
+        return False
+    current = _number(daily["High"].iloc[signal_position])
+    previous = _number(daily["High"].iloc[signal_position - 1])
+    return current is not None and previous is not None and current > previous
+
+
 def moving_average_slope_pct(
     daily: pd.DataFrame,
     position: int,

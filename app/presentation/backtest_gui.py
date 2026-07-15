@@ -34,6 +34,9 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
+    HIGHER_HIGH_PREVIOUS_DAY,
+    HIGHER_HIGH_TWO_OF_THREE,
+    LOWER_LOW_CONSECUTIVE_TEST,
     requires_intraday_prices,
 )
 from app.data.settings_store import load_watchlist_path, save_watchlist_path
@@ -48,11 +51,18 @@ MA5_SLOWDOWN_LABELS = {
 }
 MA5_SLOWDOWN_VALUES = {label: value for value, label in MA5_SLOWDOWN_LABELS.items()}
 LOWER_LOW_LABELS = {
+    1: "1回も許容しない",
+    2: "1回のみ許容",
+    3: "2回許容",
     0: "考慮しない",
-    2: "3日のうち2回安値切下げ",
-    3: "3日連続安値切下げ",
+    LOWER_LOW_CONSECUTIVE_TEST: "連続切下(テスト用)",
 }
 LOWER_LOW_VALUES = {label: value for value, label in LOWER_LOW_LABELS.items()}
+HIGHER_HIGH_LABELS = {
+    HIGHER_HIGH_PREVIOUS_DAY: "前日高値更新",
+    HIGHER_HIGH_TWO_OF_THREE: "高値更新3日のうち2回",
+}
+HIGHER_HIGH_VALUES = {label: value for value, label in HIGHER_HIGH_LABELS.items()}
 MA25_NEGATIVE_SLOPE_LABELS = {
     MA25_NEGATIVE_SLOPE_REJECT: "傾き負を即除外",
     MA25_NEGATIVE_SLOPE_SCORE: "即除外しない",
@@ -105,11 +115,7 @@ def summarize_condition(gui_input: BacktestGuiInput) -> str:
     config = gui_input.config
     entry_label = _entry_label(config.entry_time)
     lower_low_label = f"安値切下げ:{LOWER_LOW_LABELS.get(config.lower_low_exclude_count, '考慮しない')}"
-    higher_high_label = (
-        "高値更新考慮なし"
-        if config.higher_high_exclude_count == 0
-        else f"高値更新{config.higher_high_exclude_count}回以上"
-    )
+    higher_high_label = HIGHER_HIGH_LABELS.get(config.higher_high_exclude_count, "高値更新考慮なし")
     range_label = (
         f"{_range_position_label(config.entry_time)}考慮せず"
         if config.range_position_min_pct is None
@@ -180,7 +186,7 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     daily_entry_var = tk.StringVar(value="翌営業日始値")
     intraday_entry_var = tk.StringVar(value=ENTRY_1100)
     lower_low_var = tk.StringVar(value=LOWER_LOW_LABELS[0])
-    higher_high_var = tk.StringVar(value="考慮しない")
+    higher_high_var = tk.StringVar(value=HIGHER_HIGH_LABELS[HIGHER_HIGH_PREVIOUS_DAY])
     range_position_var = tk.StringVar(value="考慮せず")
     require_ma5_slope_var = tk.BooleanVar(value=False)
     ma5_slowdown_var = tk.StringVar(value=MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
@@ -279,11 +285,11 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     )
     range_position_box.grid(row=1, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="3日間の高値更新条件").grid(row=2, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(exclusion_frame, text="高値更新条件").grid(row=2, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
         exclusion_frame,
         textvariable=higher_high_var,
-        values=("考慮しない", "1回以上", "2回以上", "3回"),
+        values=tuple(HIGHER_HIGH_VALUES.keys()),
         state="readonly",
         width=14,
     ).grid(row=2, column=1, sticky="w", padx=10, pady=6)
@@ -383,9 +389,7 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
         range_position_min_pct = (
             None if selected_range_position == "考慮せず" else float(selected_range_position.removesuffix("%以上"))
         )
-        higher_high_exclude_count = (
-            0 if higher_high_var.get() == "考慮しない" else int(higher_high_var.get().removesuffix("以上").removesuffix("回"))
-        )
+        higher_high_exclude_count = HIGHER_HIGH_VALUES[higher_high_var.get()]
         config = VwapBacktestConfig(
             start_date=start_entry.get_date().strftime("%Y-%m-%d"),
             end_date=end_entry.get_date().strftime("%Y-%m-%d"),

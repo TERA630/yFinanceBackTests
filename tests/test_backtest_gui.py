@@ -13,6 +13,8 @@ from app.domain.vwap_backtest import (
 )
 from app.presentation.backtest_gui import (
     BacktestGuiInput,
+    HIGHER_HIGH_LABELS,
+    LOWER_LOW_LABELS,
     append_ma25_conditions,
     append_saved_condition,
     default_date_range,
@@ -124,7 +126,7 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
 
         self.assertIn("25日乖離 -3.5%超-4%以下", summary)
         self.assertIn("日中足:14:00", summary)
-        self.assertIn("安値切下げ:3日のうち2回安値切下げ", summary)
+        self.assertIn("安値切下げ:1回のみ許容", summary)
         self.assertIn("高値更新考慮なし", summary)
         self.assertIn("支持線距離考慮なし", summary)
         self.assertIn("5日線上向き", summary)
@@ -237,7 +239,17 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("高値更新2回以上", summary)
+        self.assertIn("高値更新3日のうち2回", summary)
+
+    def test_requested_daily_condition_dropdown_labels_are_available(self):
+        self.assertEqual(
+            tuple(LOWER_LOW_LABELS.values()),
+            ("1回も許容しない", "1回のみ許容", "2回許容", "考慮しない", "連続切下(テスト用)"),
+        )
+        self.assertEqual(
+            tuple(HIGHER_HIGH_LABELS.values()),
+            ("前日高値更新", "高値更新3日のうち2回"),
+        )
 
     def test_condition_summary_includes_ma5_slope_slowdown_policy(self):
         summary = summarize_condition(

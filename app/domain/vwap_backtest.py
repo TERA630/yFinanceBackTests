@@ -38,6 +38,9 @@ MA25_NEGATIVE_SLOPE_POLICIES = (
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
 )
+LOWER_LOW_CONSECUTIVE_TEST = 4
+HIGHER_HIGH_PREVIOUS_DAY = 1
+HIGHER_HIGH_TWO_OF_THREE = 2
 
 
 @dataclass(frozen=True)
@@ -67,8 +70,8 @@ class VwapBacktestConfig:
             raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
         if self.entry_time == ENTRY_OPEN and self.breakdown_score_threshold is not None:
             raise ValueError("始値エントリーでは崩れスコア条件を使えません。")
-        if self.lower_low_exclude_count not in (0, 1, 2, 3):
-            raise ValueError("安値切り下げ除外回数は0～3で指定してください。")
+        if self.lower_low_exclude_count not in (0, 1, 2, 3, LOWER_LOW_CONSECUTIVE_TEST):
+            raise ValueError("安値切り下げ条件は対応する選択肢から指定してください。")
         if self.higher_high_exclude_count not in (0, 1, 2, 3):
             raise ValueError("高値更新条件は0～3で指定してください。")
         if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
@@ -93,6 +96,22 @@ def requires_intraday_prices(config: VwapBacktestConfig) -> bool:
         config.entry_time in INTRADAY_ENTRY_TIMES
         or config.breakdown_score_threshold is not None
     )
+
+
+def is_lower_low_excluded(lower_low_count_3d: int, condition: int) -> bool:
+    if condition == LOWER_LOW_CONSECUTIVE_TEST:
+        return lower_low_count_3d == 3
+    return condition > 0 and lower_low_count_3d >= condition
+
+
+def is_higher_high_condition_met(
+    higher_high_count_3d: int,
+    latest_day_updated: bool,
+    condition: int,
+) -> bool:
+    if condition == HIGHER_HIGH_PREVIOUS_DAY:
+        return latest_day_updated
+    return condition <= 0 or higher_high_count_3d >= condition
 
 
 @dataclass(frozen=True)

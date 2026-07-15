@@ -26,6 +26,8 @@ from app.domain.vwap_backtest import (
     intraday_range_position_pct,
     is_ma5_slope_slowdown_excluded,
     is_ma25_slope_excluded,
+    is_higher_high_condition_met,
+    is_lower_low_excluded,
     MA25_NEGATIVE_SLOPE_REJECT,
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
     MA25_NEGATIVE_SLOPE_REJECT_SLOWDOWN_5D,
@@ -36,6 +38,7 @@ from app.domain.price_series import (
     higher_low_count,
     intraday_candle,
     intraday_volume_ratio,
+    latest_day_updates_high,
     lower_low_count,
     moving_average_slope_pct,
     nearest_support_distance_atr,
@@ -97,12 +100,16 @@ def run_vwap_backtest(
 
             lower_lows = lower_low_count(daily, daily_position)
             higher_lows = higher_low_count(daily, daily_position)
-            if config.lower_low_exclude_count > 0 and lower_lows >= config.lower_low_exclude_count:
+            if is_lower_low_excluded(lower_lows, config.lower_low_exclude_count):
                 skipped["安値切り下げ回数が除外基準以上"] += 1
                 continue
             higher_highs = higher_high_count(daily, daily_position)
-            if config.higher_high_exclude_count > 0 and higher_highs < config.higher_high_exclude_count:
-                skipped["高値更新回数が必要回数未満"] += 1
+            if not is_higher_high_condition_met(
+                higher_highs,
+                latest_day_updates_high(daily, daily_position),
+                config.higher_high_exclude_count,
+            ):
+                skipped["高値更新条件を満たさない"] += 1
                 continue
 
             if config.entry_time == ENTRY_PREV_CLOSE:
