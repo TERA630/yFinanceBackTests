@@ -7,6 +7,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.domain.position_backtest import (
+    EXIT_HORIZON,
+    EXIT_INCOMPLETE,
+    EXIT_STOP_LOSS,
+    EXIT_TAKE_PROFIT,
+)
 from app.domain.vwap_backtest import (
     ENTRY_OPEN,
     ENTRY_PREV_CLOSE,
@@ -47,6 +53,96 @@ def save_a11_reports(out_dir: Path, trades: pd.DataFrame, summary: dict) -> tupl
     summary_path.write_text(_summary_markdown(summary), encoding="utf-8")
     result_path.write_text(_result_markdown(trades, summary), encoding="utf-8")
     return summary_path, result_path
+
+
+def save_position_report(out_dir: Path, trades: pd.DataFrame, summary: dict) -> Path:
+    """Save one combined report for all MA25 bands and holding periods."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_date = datetime.now().strftime("%m-%d")
+    index = 1
+    while True:
+        path = out_dir / f"bt11_position_MA25(-4,12)-{report_date}_result-{index}.md"
+        if not path.exists():
+            path.write_text(_position_markdown(trades, summary), encoding="utf-8")
+            return path
+        index += 1
+
+
+def _position_markdown(trades: pd.DataFrame, summary: dict) -> str:
+    lines = [
+        "# A11バックテスト ポジション法",
+        "",
+        "## 実行条件",
+        "",
+        f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
+        "- 集計方法: ポジション法",
+        "- MA25乖離率帯: -4%超～12%以下（2%刻み・8帯域）",
+        f"- エントリー条件: {_entry_label(summary['entry_time'])}",
+        f"- 3日間の安値切り下げ: {_lower_low_condition(summary.get('lower_low_exclude_count'))}",
+        f"- {_range_position_label(summary['entry_time'])}: {_range_condition(summary.get('range_position_min_pct'))}",
+        f"- 直下支持線距離: {_support_distance_condition(summary.get('support_distance_max_atr'))}",
+        f"- 25日線傾き: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
+        f"- 5日線傾き: {'0%超を必須' if summary.get('require_ma5_slope_positive') else '条件なし'}",
+        f"- 5日線傾き鈍化: {_ma5_slowdown_label(summary.get('ma5_slope_slowdown_policy'))}",
+        f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
+        f"- 監視銘柄数: {summary['stock_count']}銘柄",
+        "",
+    ]
+
+    for horizon, period in summary["periods"].items():
+        lines.extend([
+            f"## {horizon}営業日ポジション法",
+            "",
+            f"- シグナル発生件数: {period['signal_count']}件",
+            f"- 独立エントリー件数: {period['independent_entry_count']}件",
+            f"- 重複除外: {period['duplicate_count']}件",
+            f"- 対象銘柄数: {period['target_stock_count']}銘柄",
+            "",
+            "### 重複除外内訳",
+            "",
+            f"- 保有中シグナル: {period['duplicate_holding_count']}件",
+            f"- シグナル未リセット: {period['duplicate_not_reset_count']}件",
+            f"- 最低再エントリー間隔未満: {period['duplicate_min_interval_count']}件",
+            "",
+            "### 取引成績",
+            "",
+            f"- 決済済み件数: {period['completed_count']}件",
+            f"- 勝率: {_percent(period['win_rate_pct'])}",
+            f"- 平均損益率: {_percent(period['average_return_pct'])}",
+            f"- 損益率中央値: {_percent(period['median_return_pct'])}",
+            f"- +5%利確: {period['take_profit_count']}件",
+            f"- -3%損切り: {period['stop_loss_count']}件",
+            f"- {horizon}営業日満了: {period['holding_period_exit_count']}件",
+            f"- 将来データ不足・未決済: {period['incomplete_count']}件",
+            "",
+        ])
+
+    lines.extend(["## 個別取引", ""])
+    if trades.empty:
+        lines.extend(["独立エントリーはありませんでした。", ""])
+    else:
+        lines.extend([
+            "| 評価期間 | シグナル日 | 銘柄 | MA25帯 | エントリー日 | 買値 | 決済日 | 決済理由 | 売値 | 損益率 |",
+            "|---:|---|---|---|---|---:|---|---|---:|---:|",
+        ])
+        for _, row in trades.iterrows():
+            band = f"{float(row['dev25_band_min']):g}%超～{float(row['dev25_band_max']):g}%以下"
+            lines.append(
+                f"| {int(row['holding_period_days'])}営業日 | {_date(row['signal_date'])} | "
+                f"{row['name']} ({row['code']}) | {band} | {_date(row['entry_date'])} | "
+                f"{_price(row['entry_price'])} | {_date(row.get('exit_date'))} | "
+                f"{_position_exit_label(row.get('exit_reason'))} | {_price(row.get('exit_price'))} | "
+                f"{_percent(row.get('position_return_pct'))} |"
+            )
+        lines.append("")
+
+    lines.extend([
+        "※ +5%と-3%に同一営業日で到達した場合は、-3%が先に到達したものとして集計しています。",
+        "",
+        "※ 手数料、税金、スリッページ、配当は考慮していません。",
+        "",
+    ])
+    return "\n".join(lines)
 
 
 def _report_paths(out_dir: Path, summary: dict, report_date: str) -> tuple[Path, Path]:
@@ -180,6 +276,7 @@ def _result_markdown(trades: pd.DataFrame, summary: dict) -> str:
 def _condition_lines(summary: dict) -> list[str]:
     return [
         f"- 乖離判定期間: {summary['start_date']} ～ {summary['end_date']}",
+        "- 集計方法: 全シグナル法",
         f"- 前日・当日25日乖離率: {summary['dev25_min']}% < 乖離率 <= {summary['dev25_max']}%",
         f"- 25日線傾き: {_ma25_negative_slope_label(summary.get('ma25_negative_slope_policy'))}",
         f"- 崩れスコア除外: {_breakdown_score_condition(summary.get('breakdown_score_threshold'))}",
@@ -299,3 +396,19 @@ def _text_or_na(value) -> str:
     if value is None or pd.isna(value) or value == "":
         return "N/A"
     return str(value)
+
+
+def _date(value) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def _position_exit_label(value) -> str:
+    labels = {
+        EXIT_TAKE_PROFIT: "+5%利確",
+        EXIT_STOP_LOSS: "-3%損切り",
+        EXIT_HORIZON: "評価期間満了",
+        EXIT_INCOMPLETE: "将来データ不足",
+    }
+    return labels.get(value, "N/A")

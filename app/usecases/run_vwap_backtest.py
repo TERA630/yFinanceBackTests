@@ -49,6 +49,10 @@ from app.usecases.watchlist import load_watchlist_items
 def run_vwap_backtest(
     stock_md_path: Path,
     config: VwapBacktestConfig,
+    *,
+    daily_map: dict[str, pd.DataFrame] | None = None,
+    intraday_map: dict[str, pd.DataFrame] | None = None,
+    announce: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
     config.validate()
     needs_intraday = requires_intraday_prices(config)
@@ -56,15 +60,21 @@ def run_vwap_backtest(
     watchlist_items = load_watchlist_items(stock_md_path)
     watchlist = [(item.name, item.code) for item in watchlist_items]
 
-    print("[1/3] 日足データ取得")
-    daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
+    if announce:
+        print("[1/3] 日足データ取得")
+    if daily_map is None:
+        daily_map = fetch_daily_prices(watchlist, config.start_date, config.end_date)
     if needs_intraday:
-        print("[2/3] 5分足データ取得")
-        intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
+        if announce:
+            print("[2/3] 5分足データ取得")
+        if intraday_map is None:
+            intraday_map = fetch_intraday_prices(watchlist, config.start_date, config.end_date)
     else:
-        print("[2/3] 5分足データ取得なし（日足条件のみ）")
-        intraday_map = {}
-    print("[3/3] A11バックテスト")
+        if announce:
+            print("[2/3] 5分足データ取得なし（日足条件のみ）")
+        intraday_map = {} if intraday_map is None else intraday_map
+    if announce:
+        print("[3/3] A11バックテスト")
 
     records: List[dict] = []
     skipped = Counter()
@@ -331,6 +341,7 @@ def build_summary(
     skipped: Counter,
 ) -> dict:
     summary: Dict[str, object] = {
+        "backtest_method": config.backtest_method,
         "start_date": config.start_date,
         "end_date": config.end_date,
         "dev25_min": config.dev25_min,

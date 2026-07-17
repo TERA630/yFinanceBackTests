@@ -14,8 +14,22 @@ ENTRY_1100 = "11:00"
 ENTRY_1400 = "14:00"
 ENTRY_TIMES = (ENTRY_PREV_CLOSE, ENTRY_OPEN, ENTRY_1100, ENTRY_1400)
 INTRADAY_ENTRY_TIMES = (ENTRY_1100, ENTRY_1400)
+BACKTEST_METHOD_ALL_SIGNALS = "all_signals"
+BACKTEST_METHOD_POSITION = "position"
+BACKTEST_METHODS = (BACKTEST_METHOD_ALL_SIGNALS, BACKTEST_METHOD_POSITION)
 HORIZONS = (1, 5, 10, 15)
 EXCURSION_WINDOWS = (5, 10, 15)
+POSITION_HORIZONS = EXCURSION_WINDOWS
+MA25_DEVIATION_RANGES = (
+    (-4.0, -2.0),
+    (-2.0, 0.0),
+    (0.0, 2.0),
+    (2.0, 4.0),
+    (4.0, 6.0),
+    (6.0, 8.0),
+    (8.0, 10.0),
+    (10.0, 12.0),
+)
 MA5_SLOWDOWN_IGNORE = "ignore"
 MA5_SLOWDOWN_REJECT_ANY = "reject_any"
 MA5_SLOWDOWN_ALLOW_ONE = "allow_one"
@@ -55,6 +69,7 @@ class VwapBacktestConfig:
     ma25_negative_slope_policy: str = MA25_NEGATIVE_SLOPE_REJECT
     breakdown_score_threshold: Optional[int] = None
     support_distance_max_atr: Optional[float] = None
+    backtest_method: str = BACKTEST_METHOD_ALL_SIGNALS
 
     def validate(self) -> None:
         start = pd.Timestamp(self.start_date)
@@ -65,6 +80,8 @@ class VwapBacktestConfig:
             raise ValueError("25日乖離率の最低値は最高値より小さくしてください。")
         if self.entry_time not in ENTRY_TIMES:
             raise ValueError(f"未対応のエントリー時刻です: {self.entry_time}")
+        if self.backtest_method not in BACKTEST_METHODS:
+            raise ValueError("バックテスト方式は全シグナル法またはポジション法を指定してください。")
         if self.entry_time == ENTRY_OPEN and self.breakdown_score_threshold is not None:
             raise ValueError("始値エントリーでは崩れスコア条件を使えません。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3, LOWER_LOW_CONSECUTIVE_TEST):

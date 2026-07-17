@@ -20,6 +20,8 @@ except Exception:
     DateEntry = None
 
 from app.domain.vwap_backtest import (
+    BACKTEST_METHOD_ALL_SIGNALS,
+    BACKTEST_METHOD_POSITION,
     VwapBacktestConfig,
     ENTRY_1100,
     ENTRY_1400,
@@ -34,6 +36,7 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
+    MA25_DEVIATION_RANGES,
     LOWER_LOW_CONSECUTIVE_TEST,
     requires_intraday_prices,
 )
@@ -69,7 +72,11 @@ BREAKDOWN_SCORE_VALUES = {
     "4点以上": 4,
     "5点以上": 5,
 }
-MA25_DEVIATION_RANGES = ((-4.0, -2.0), (-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0))
+BACKTEST_METHOD_LABELS = {
+    BACKTEST_METHOD_ALL_SIGNALS: "全シグナル法",
+    BACKTEST_METHOD_POSITION: "ポジション法",
+}
+BACKTEST_METHOD_VALUES = {label: value for value, label in BACKTEST_METHOD_LABELS.items()}
 
 
 @dataclass(frozen=True)
@@ -106,6 +113,12 @@ def append_ma25_conditions(
 
 def summarize_condition(gui_input: BacktestGuiInput) -> str:
     config = gui_input.config
+    method_label = BACKTEST_METHOD_LABELS.get(config.backtest_method, "全シグナル法")
+    deviation_label = (
+        "25日乖離 -4%超-12%以下（8帯域）"
+        if config.backtest_method == BACKTEST_METHOD_POSITION
+        else f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下"
+    )
     entry_label = _entry_label(config.entry_time)
     lower_low_label = f"安値切下げ:{LOWER_LOW_LABELS.get(config.lower_low_exclude_count, '考慮しない')}"
     range_label = (
@@ -127,7 +140,7 @@ def summarize_condition(gui_input: BacktestGuiInput) -> str:
         else f"支持線距離{config.support_distance_max_atr:g}ATR以内"
     )
     return (
-        f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
+        f"{method_label} / {deviation_label} / "
         f"{entry_label} / {lower_low_label} / {range_label} / "
         f"{support_label} / {ma5_label} / 5日線鈍化:{ma5_slowdown_label} / "
         f"25日線傾き:{ma25_slope_label} / "
@@ -172,6 +185,7 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     frame.pack(fill=tk.BOTH, expand=True)
     remembered_watchlist = load_watchlist_path()
     stock_var = tk.StringVar(value=str(remembered_watchlist) if remembered_watchlist else "")
+    backtest_method_var = tk.StringVar(value=BACKTEST_METHOD_LABELS[BACKTEST_METHOD_ALL_SIGNALS])
     min_var = tk.StringVar(value="-5.0")
     max_var = tk.StringVar(value="5.0")
     entry_mode_var = tk.StringVar(value="daily")
@@ -197,6 +211,20 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     end_entry = DateEntry(date_frame, width=14, date_pattern="yyyy-mm-dd", locale="ja_JP")
     end_entry.set_date(default_end.date())
     end_entry.grid(row=0, column=3, sticky="w")
+
+    ttk.Label(frame, text="集計方法").grid(row=1, column=0, sticky="w", pady=6)
+    method_frame = ttk.Frame(frame)
+    method_frame.grid(row=1, column=1, columnspan=2, sticky="w")
+    for column, (_method, label) in enumerate(BACKTEST_METHOD_LABELS.items()):
+        ttk.Radiobutton(
+            method_frame,
+            text=label,
+            variable=backtest_method_var,
+            value=label,
+        ).grid(row=0, column=column, sticky="w", padx=(0, 16))
+    ttk.Label(method_frame, text="※ポジション法は-4%超～12%以下の8帯域を一括評価").grid(
+        row=1, column=0, columnspan=2, sticky="w", pady=(3, 0)
+    )
 
     ttk.Label(frame, text="監視銘柄ファイル").grid(row=2, column=0, sticky="w", pady=6)
     ttk.Entry(frame, textvariable=stock_var, width=48).grid(row=2, column=1, sticky="w")
@@ -371,11 +399,14 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
         range_position_min_pct = (
             None if selected_range_position == "考慮せず" else float(selected_range_position.removesuffix("%以上"))
         )
+        backtest_method = BACKTEST_METHOD_VALUES[backtest_method_var.get()]
+        dev25_min = -4.0 if backtest_method == BACKTEST_METHOD_POSITION else float(min_var.get())
+        dev25_max = 12.0 if backtest_method == BACKTEST_METHOD_POSITION else float(max_var.get())
         config = VwapBacktestConfig(
             start_date=start_entry.get_date().strftime("%Y-%m-%d"),
             end_date=end_entry.get_date().strftime("%Y-%m-%d"),
-            dev25_min=float(min_var.get()),
-            dev25_max=float(max_var.get()),
+            dev25_min=dev25_min,
+            dev25_max=dev25_max,
             entry_time=entry_time,
             lower_low_exclude_count=LOWER_LOW_VALUES[lower_low_var.get()],
             range_position_min_pct=range_position_min_pct,
@@ -384,6 +415,7 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
             ma5_slope_slowdown_policy=MA5_SLOWDOWN_VALUES[ma5_slowdown_var.get()],
             ma25_negative_slope_policy=MA25_NEGATIVE_SLOPE_VALUES[ma25_negative_slope_var.get()],
             breakdown_score_threshold=BREAKDOWN_SCORE_VALUES[breakdown_score_var.get()],
+            backtest_method=backtest_method,
         )
         config.validate()
         if requires_intraday_prices(config):
@@ -447,7 +479,7 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
 
 
 def show_batch_completion(
-    outputs: Sequence[tuple[Path, Path]],
+    outputs: Sequence[tuple[Path, ...]],
     errors: Sequence[tuple[BacktestGuiInput, Exception]],
 ) -> None:
     if tk is None or messagebox is None:
@@ -457,11 +489,10 @@ def show_batch_completion(
     lines = [
         f"A11バックテストが完了しました。成功: {len(outputs)}件 / エラー: {len(errors)}件"
     ]
-    for index, (summary_path, result_path) in enumerate(outputs, start=1):
+    for index, output_paths in enumerate(outputs, start=1):
         lines.append("")
         lines.append(f"[成功 {index}]")
-        lines.append(str(summary_path))
-        lines.append(str(result_path))
+        lines.extend(str(path) for path in output_paths)
     for index, (gui_input, exc) in enumerate(errors, start=1):
         lines.append("")
         lines.append(f"[エラー {index}] {summarize_condition(gui_input)}")

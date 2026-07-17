@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.domain.vwap_backtest import (
+    BACKTEST_METHOD_POSITION,
     VwapBacktestConfig,
     ENTRY_1100,
     ENTRY_1400,
@@ -133,6 +134,25 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
         self.assertIn("崩れスコア考慮なし", summary)
         self.assertNotIn("watchlist", summary)
         self.assertNotIn("2026-06", summary)
+
+    def test_position_summary_uses_all_eight_ma25_bands(self):
+        summary = summarize_condition(
+            BacktestGuiInput(
+                Path("watchlist.md"),
+                Path("out"),
+                VwapBacktestConfig(
+                    "2026-06-01",
+                    "2026-06-10",
+                    -1.0,
+                    1.0,
+                    ENTRY_PREV_CLOSE,
+                    backtest_method=BACKTEST_METHOD_POSITION,
+                ),
+            )
+        )
+
+        self.assertIn("ポジション法", summary)
+        self.assertIn("25日乖離 -4%超-12%以下（8帯域）", summary)
 
     def test_prev_close_condition_summary_uses_japanese_label(self):
         summary = summarize_condition(
