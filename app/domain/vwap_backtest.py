@@ -39,8 +39,6 @@ MA25_NEGATIVE_SLOPE_POLICIES = (
     MA25_NEGATIVE_SLOPE_REJECT_NEGATIVE_OR_SLOWDOWN_5D,
 )
 LOWER_LOW_CONSECUTIVE_TEST = 4
-HIGHER_HIGH_PREVIOUS_DAY = 1
-HIGHER_HIGH_TWO_OF_THREE = 2
 
 
 @dataclass(frozen=True)
@@ -51,7 +49,6 @@ class VwapBacktestConfig:
     dev25_max: float
     entry_time: str
     lower_low_exclude_count: int = 0
-    higher_high_exclude_count: int = 0
     range_position_min_pct: Optional[float] = None
     require_ma5_slope_positive: bool = False
     ma5_slope_slowdown_policy: str = MA5_SLOWDOWN_IGNORE
@@ -72,8 +69,6 @@ class VwapBacktestConfig:
             raise ValueError("始値エントリーでは崩れスコア条件を使えません。")
         if self.lower_low_exclude_count not in (0, 1, 2, 3, LOWER_LOW_CONSECUTIVE_TEST):
             raise ValueError("安値切り下げ条件は対応する選択肢から指定してください。")
-        if self.higher_high_exclude_count not in (0, 1, 2, 3):
-            raise ValueError("高値更新条件は0～3で指定してください。")
         if self.range_position_min_pct is not None and self.range_position_min_pct not in (30, 40, 50, 60):
             raise ValueError("終値位置・終端位置は30%、40%、50%、60%、または考慮なしで指定してください。")
         if self.support_distance_max_atr is not None and self.support_distance_max_atr not in (0.7, 1.0):
@@ -102,16 +97,6 @@ def is_lower_low_excluded(lower_low_count_3d: int, condition: int) -> bool:
     if condition == LOWER_LOW_CONSECUTIVE_TEST:
         return lower_low_count_3d == 3
     return condition > 0 and lower_low_count_3d >= condition
-
-
-def is_higher_high_condition_met(
-    higher_high_count_3d: int,
-    latest_day_updated: bool,
-    condition: int,
-) -> bool:
-    if condition == HIGHER_HIGH_PREVIOUS_DAY:
-        return latest_day_updated
-    return condition <= 0 or higher_high_count_3d >= condition
 
 
 @dataclass(frozen=True)

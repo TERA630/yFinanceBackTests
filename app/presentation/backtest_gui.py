@@ -34,8 +34,6 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
-    HIGHER_HIGH_PREVIOUS_DAY,
-    HIGHER_HIGH_TWO_OF_THREE,
     LOWER_LOW_CONSECUTIVE_TEST,
     requires_intraday_prices,
 )
@@ -58,11 +56,6 @@ LOWER_LOW_LABELS = {
     LOWER_LOW_CONSECUTIVE_TEST: "連続切下(テスト用)",
 }
 LOWER_LOW_VALUES = {label: value for value, label in LOWER_LOW_LABELS.items()}
-HIGHER_HIGH_LABELS = {
-    HIGHER_HIGH_PREVIOUS_DAY: "前日高値更新",
-    HIGHER_HIGH_TWO_OF_THREE: "高値更新3日のうち2回",
-}
-HIGHER_HIGH_VALUES = {label: value for value, label in HIGHER_HIGH_LABELS.items()}
 MA25_NEGATIVE_SLOPE_LABELS = {
     MA25_NEGATIVE_SLOPE_REJECT: "傾き負を即除外",
     MA25_NEGATIVE_SLOPE_SCORE: "即除外しない",
@@ -76,7 +69,7 @@ BREAKDOWN_SCORE_VALUES = {
     "4点以上": 4,
     "5点以上": 5,
 }
-MA25_DEVIATION_RANGES = ((-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0))
+MA25_DEVIATION_RANGES = ((-4.0, -2.0), (-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0))
 
 
 @dataclass(frozen=True)
@@ -115,7 +108,6 @@ def summarize_condition(gui_input: BacktestGuiInput) -> str:
     config = gui_input.config
     entry_label = _entry_label(config.entry_time)
     lower_low_label = f"安値切下げ:{LOWER_LOW_LABELS.get(config.lower_low_exclude_count, '考慮しない')}"
-    higher_high_label = HIGHER_HIGH_LABELS.get(config.higher_high_exclude_count, "高値更新考慮なし")
     range_label = (
         f"{_range_position_label(config.entry_time)}考慮せず"
         if config.range_position_min_pct is None
@@ -136,7 +128,7 @@ def summarize_condition(gui_input: BacktestGuiInput) -> str:
     )
     return (
         f"25日乖離 {config.dev25_min:g}%超-{config.dev25_max:g}%以下 / "
-        f"{entry_label} / {lower_low_label} / {higher_high_label} / {range_label} / "
+        f"{entry_label} / {lower_low_label} / {range_label} / "
         f"{support_label} / {ma5_label} / 5日線鈍化:{ma5_slowdown_label} / "
         f"25日線傾き:{ma25_slope_label} / "
         f"{breakdown_label}"
@@ -186,7 +178,6 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     daily_entry_var = tk.StringVar(value="翌営業日始値")
     intraday_entry_var = tk.StringVar(value=ENTRY_1100)
     lower_low_var = tk.StringVar(value=LOWER_LOW_LABELS[0])
-    higher_high_var = tk.StringVar(value=HIGHER_HIGH_LABELS[HIGHER_HIGH_PREVIOUS_DAY])
     range_position_var = tk.StringVar(value="考慮せず")
     require_ma5_slope_var = tk.BooleanVar(value=False)
     ma5_slowdown_var = tk.StringVar(value=MA5_SLOWDOWN_LABELS[MA5_SLOWDOWN_IGNORE])
@@ -285,38 +276,29 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
     )
     range_position_box.grid(row=1, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="高値更新条件").grid(row=2, column=0, sticky="w", padx=10, pady=6)
-    ttk.Combobox(
-        exclusion_frame,
-        textvariable=higher_high_var,
-        values=tuple(HIGHER_HIGH_VALUES.keys()),
-        state="readonly",
-        width=14,
-    ).grid(row=2, column=1, sticky="w", padx=10, pady=6)
-
     ttk.Checkbutton(
         exclusion_frame,
         text="5日線傾き > 0 を条件にする",
         variable=require_ma5_slope_var,
-    ).grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=6)
+    ).grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="5日線傾き鈍化").grid(row=5, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(exclusion_frame, text="5日線傾き鈍化").grid(row=3, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
         exclusion_frame,
         textvariable=ma5_slowdown_var,
         values=tuple(MA5_SLOWDOWN_VALUES.keys()),
         state="readonly",
         width=30,
-    ).grid(row=5, column=1, sticky="w", padx=10, pady=6)
+    ).grid(row=3, column=1, sticky="w", padx=10, pady=6)
 
-    ttk.Label(exclusion_frame, text="25日線傾き").grid(row=6, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(exclusion_frame, text="25日線傾き").grid(row=4, column=0, sticky="w", padx=10, pady=6)
     ttk.Combobox(
         exclusion_frame,
         textvariable=ma25_negative_slope_var,
         values=tuple(MA25_NEGATIVE_SLOPE_VALUES.keys()),
         state="readonly",
         width=32,
-    ).grid(row=6, column=1, sticky="w", padx=10, pady=6)
+    ).grid(row=4, column=1, sticky="w", padx=10, pady=6)
 
     score_frame = ttk.LabelFrame(frame, text="日中足条件（5分足）")
     score_frame.grid(row=8, column=0, columnspan=3, sticky="ew", pady=6)
@@ -389,7 +371,6 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
         range_position_min_pct = (
             None if selected_range_position == "考慮せず" else float(selected_range_position.removesuffix("%以上"))
         )
-        higher_high_exclude_count = HIGHER_HIGH_VALUES[higher_high_var.get()]
         config = VwapBacktestConfig(
             start_date=start_entry.get_date().strftime("%Y-%m-%d"),
             end_date=end_entry.get_date().strftime("%Y-%m-%d"),
@@ -397,7 +378,6 @@ def request_backtest_inputs() -> Optional[list[BacktestGuiInput]]:
             dev25_max=float(max_var.get()),
             entry_time=entry_time,
             lower_low_exclude_count=LOWER_LOW_VALUES[lower_low_var.get()],
-            higher_high_exclude_count=higher_high_exclude_count,
             range_position_min_pct=range_position_min_pct,
             support_distance_max_atr=None,
             require_ma5_slope_positive=require_ma5_slope_var.get(),

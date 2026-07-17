@@ -21,8 +21,6 @@ from app.domain.vwap_backtest import (
     MA5_SLOWDOWN_ALLOW_THREE_DAYS_AGO,
     MA5_SLOWDOWN_IGNORE,
     MA5_SLOWDOWN_REJECT_ANY,
-    HIGHER_HIGH_PREVIOUS_DAY,
-    HIGHER_HIGH_TWO_OF_THREE,
     LOWER_LOW_CONSECUTIVE_TEST,
 )
 
@@ -190,7 +188,6 @@ def _condition_lines(summary: dict) -> list[str]:
         _vwap_condition(summary),
         f"- エントリー条件: {_entry_label(summary['entry_time'])}",
         f"- 3日間の安値切り下げ: {_lower_low_condition(summary.get('lower_low_exclude_count'))}",
-        f"- 高値更新条件: {_higher_high_condition(summary.get('higher_high_exclude_count'))}",
         f"- {_range_position_label(summary['entry_time'])}: {_range_condition(summary.get('range_position_min_pct'))}",
         f"- 直下支持線距離: {_support_distance_condition(summary.get('support_distance_max_atr'))}",
         f"- 監視銘柄数: {summary['stock_count']}",
@@ -250,17 +247,6 @@ def _lower_low_condition(value) -> str:
     if value is None or pd.isna(value):
         return labels[0]
     return labels.get(int(value), labels[0])
-
-
-def _higher_high_condition(value) -> str:
-    labels = {
-        0: "考慮しない",
-        HIGHER_HIGH_PREVIOUS_DAY: "前日高値更新",
-        HIGHER_HIGH_TWO_OF_THREE: "高値更新3日のうち2回",
-    }
-    if value is None or pd.isna(value):
-        return labels[0]
-    return labels.get(int(value), f"3日のうち{int(value)}回")
 
 
 def _ma5_slowdown_label(value) -> str:

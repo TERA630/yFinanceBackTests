@@ -13,7 +13,6 @@ from app.domain.vwap_backtest import (
 )
 from app.presentation.backtest_gui import (
     BacktestGuiInput,
-    HIGHER_HIGH_LABELS,
     LOWER_LOW_LABELS,
     append_ma25_conditions,
     append_saved_condition,
@@ -65,7 +64,7 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
         self.assertEqual(queue[0].stock_file, Path("stock_1.md"))
         self.assertEqual(queue[-1].stock_file, Path("stock_8.md"))
 
-    def test_ma25_condition_assignment_adds_seven_ranges_with_same_entry_conditions(self):
+    def test_ma25_condition_assignment_adds_eight_ranges_with_same_entry_conditions(self):
         queue = []
         base = BacktestGuiInput(
             Path("watchlist.md"),
@@ -85,7 +84,7 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
 
         self.assertEqual(
             [(item.config.dev25_min, item.config.dev25_max) for item in queue],
-            [(-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0)],
+            [(-4.0, -2.0), (-2.0, 0.0), (0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0), (8.0, 10.0), (10.0, 12.0)],
         )
         self.assertTrue(all(item.stock_file == base.stock_file for item in queue))
         self.assertTrue(all(item.output_dir == base.output_dir for item in queue))
@@ -104,7 +103,7 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
         append_ma25_conditions(queue, existing)
 
         self.assertEqual(len(queue), 8)
-        self.assertIs(queue[0], existing)
+        self.assertEqual((queue[0].config.dev25_min, queue[0].config.dev25_max), (-4.0, -2.0))
         self.assertEqual((queue[-1].config.dev25_min, queue[-1].config.dev25_max), (10.0, 12.0))
 
     def test_condition_summary_excludes_paths_and_dates(self):
@@ -127,7 +126,7 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
         self.assertIn("25日乖離 -3.5%超-4%以下", summary)
         self.assertIn("日中足:14:00", summary)
         self.assertIn("安値切下げ:1回のみ許容", summary)
-        self.assertIn("高値更新考慮なし", summary)
+        self.assertNotIn("高値更新", summary)
         self.assertIn("支持線距離考慮なし", summary)
         self.assertIn("5日線上向き", summary)
         self.assertIn("25日線傾き:傾き負を即除外", summary)
@@ -223,34 +222,11 @@ class BacktestGuiSavedConditionTests(unittest.TestCase):
 
         self.assertIn("支持線距離0.7ATR以内", summary)
 
-    def test_condition_summary_includes_higher_high_exclusion(self):
-        summary = summarize_condition(
-            BacktestGuiInput(
-                Path("watchlist.md"),
-                Path("out"),
-                VwapBacktestConfig(
-                    "2026-06-01",
-                    "2026-06-10",
-                    -5.0,
-                    5.0,
-                    ENTRY_1100,
-                    higher_high_exclude_count=2,
-                ),
-            )
-        )
-
-        self.assertIn("高値更新3日のうち2回", summary)
-
     def test_requested_daily_condition_dropdown_labels_are_available(self):
         self.assertEqual(
             tuple(LOWER_LOW_LABELS.values()),
             ("1回も許容しない", "1回のみ許容", "2回許容", "考慮しない", "連続切下(テスト用)"),
         )
-        self.assertEqual(
-            tuple(HIGHER_HIGH_LABELS.values()),
-            ("前日高値更新", "高値更新3日のうち2回"),
-        )
-
     def test_condition_summary_includes_ma5_slope_slowdown_policy(self):
         summary = summarize_condition(
             BacktestGuiInput(
